@@ -67,31 +67,26 @@
 #define TRUSTED_MANAGER_DIGEST_LEN SHA256_BLOCK_SIZE
 #define TRUSTED_MANAGER_UID_INVALID ((uid_t)-1)
 
+#ifndef KP_RESTRICTED_MANAGER_PACKAGE
+#define KP_RESTRICTED_MANAGER_PACKAGE "me.bmax.apatch"
+#endif
+
+#ifndef KP_RESTRICTED_MANAGER_CERT_SHA256
+#define KP_RESTRICTED_MANAGER_CERT_SHA256 \
+    "d71dadc0ca07bdf594383bfb2a445134a07339f12a27044a1b326981acf5f319"
+#endif
+
 struct trusted_manager_entry {
     const char package[64];
-    const uint8_t digest[TRUSTED_MANAGER_DIGEST_LEN];
+    const char digest_hex[TRUSTED_MANAGER_DIGEST_LEN * 2 + 1];
 };
 
 static const struct trusted_manager_entry trusted_managers[] = {
     {
-        "me.bmax.apatch",
-        {
-            0xd7, 0x1d, 0xad, 0xc0, 0xca, 0x07, 0xbd, 0xf5,
-            0x94, 0x38, 0x3b, 0xfb, 0x2a, 0x44, 0x51, 0x34,
-            0xa0, 0x73, 0x39, 0xf1, 0x2a, 0x27, 0x04, 0x4a,
-            0x1b, 0x32, 0x69, 0x81, 0xac, 0xf5, 0xf3, 0x19
-        }
+        KP_RESTRICTED_MANAGER_PACKAGE,
+        KP_RESTRICTED_MANAGER_CERT_SHA256
     },
-    {
-        "com.example.apatch",
-        {
-            0xe5, 0x11, 0x33, 0x12, 0x5f, 0xef, 0x56, 0xaa,
-            0x52, 0x83, 0x91, 0xfc, 0xc2, 0x04, 0x94, 0xeb,
-            0xb5, 0x38, 0xbd, 0x8e, 0x09, 0x3d, 0x6c, 0x47,
-            0x5d, 0x6d, 0x00, 0x2a, 0x7a, 0x12, 0x1a, 0x8f
-        }
-    },
-    { "", { 0 } }
+    { "", "" }
 };
 
 static uid_t trusted_manager_uid = TRUSTED_MANAGER_UID_INVALID;
@@ -188,11 +183,30 @@ static int skip_bytes(loff_t *pos, uint64_t len)
     return 0;
 }
 
-static int cert_der_matches_trusted_digest(const uint8_t *cert_der, size_t cert_len, const uint8_t *expected_digest)
+static int trusted_digest_from_hex(const char *hex, uint8_t *digest)
+{
+    int index;
+    if (!hex || !digest || strlen(hex) != TRUSTED_MANAGER_DIGEST_LEN * 2) return -EINVAL;
+    for (index = 0; index < TRUSTED_MANAGER_DIGEST_LEN; index++) {
+        char high_char = hex[index * 2];
+        char low_char = hex[index * 2 + 1];
+        int high = high_char >= '0' && high_char <= '9' ? high_char - '0' :
+                   high_char >= 'a' && high_char <= 'f' ? high_char - 'a' + 10 : -1;
+        int low = low_char >= '0' && low_char <= '9' ? low_char - '0' :
+                  low_char >= 'a' && low_char <= 'f' ? low_char - 'a' + 10 : -1;
+        if (high < 0 || low < 0) return -EINVAL;
+        digest[index] = (uint8_t)((high << 4) | low);
+    }
+    return 0;
+}
+
+static int cert_der_matches_trusted_digest(const uint8_t *cert_der, size_t cert_len, const char *expected_hex)
 {
     uint8_t digest[SHA256_BLOCK_SIZE];
+    uint8_t expected_digest[TRUSTED_MANAGER_DIGEST_LEN];
     SHA256_CTX ctx;
 
+    if (trusted_digest_from_hex(expected_hex, expected_digest)) return -EINVAL;
     sha256_init(&ctx);
     sha256_update(&ctx, cert_der, cert_len);
     sha256_final(&ctx, digest);
@@ -217,7 +231,7 @@ struct zip_entry_header
     uint16_t extra_field_length;
 } __attribute__((packed));
 
-static int apk_sig_block_matches_trusted_digest(struct file *fp, uint32_t *size4, loff_t *pos, uint32_t *offset, const uint8_t *expected_digest)
+static int apk_sig_block_matches_trusted_digest(struct file *fp, uint32_t *size4, loff_t *pos, uint32_t *offset, const char *expected_digest)
 {
     uint8_t *cert_buf;
 
@@ -291,7 +305,7 @@ static int apk_has_v1_signature_file(struct file *fp)
     return 0;
 }
 
-static int apk_matches_trusted_signature(const char *path, const uint8_t *expected_digest)
+static int apk_matches_trusted_signature(const char *path, const char *expected_digest)
 {
     int i;
     int rc = 0;
@@ -1006,7 +1020,7 @@ static int refresh_trusted_manager_uid_from_packages_list(uid_t *trusted_uid_out
         }
 
         if (!apk_matches_trusted_signature(
-                apk_path, trusted_managers[i].digest)) {
+                apk_path, trusted_managers[i].digest_hex)) {
             log_boot("apk signature invalid: %s\n", apk_path);
             continue;
         }
