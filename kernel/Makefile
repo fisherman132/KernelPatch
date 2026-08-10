@@ -41,8 +41,8 @@ ifdef DEBUG
 endif
 
 ifdef ANDROID
-	CFLAGS += -DANDROID
-	X86_CFLAGS += -DANDROID
+	CFLAGS += -DANDROID -DKP_RESTRICTED_PROFILE_BUILD
+	X86_CFLAGS += -DANDROID -DKP_RESTRICTED_PROFILE_BUILD
 endif
 
 INCLUDE := -I. -Iinclude -Ipatch/include -Ilinux -Ilinux/include -Ilinux/arch/arm64/include -Ilinux/tools/arch/arm64/include

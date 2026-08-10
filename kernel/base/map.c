@@ -4,6 +4,7 @@
  */
 
 #include "setup.h"
+#include <baselib.h>
 #define NUMA_NO_NODE (-1)
 
 typedef uint64_t phys_addr_t;
@@ -77,7 +78,7 @@ static void flush_icache_all(void)
 
 static __noinline void mem_proc(map_data_t *data)
 {
-	*data = *get_data();
+    lib_memcpy(data, get_data(), sizeof(*data));
     uint64_t kernel_va = get_kva();
 
     // relocation

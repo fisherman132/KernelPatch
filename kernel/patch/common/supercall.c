@@ -93,6 +93,81 @@ static long call_kpm_control(const char __user *arg1, const char *__user arg2, v
     return module_control0(name, arglen <= 0 ? 0 : args, out_msg, outlen);
 }
 
+static int profile_command_prefix(const char *command, const char *prefix)
+{
+    while (*prefix) {
+        if (*command++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static int profile_command_exact(const char *command, const char *expected)
+{
+    while (*expected) {
+        if (*command++ != *expected++) return 0;
+    }
+    return *command == '\0';
+}
+
+static int profile_command_allowed(const char *command)
+{
+    static const char *exact[] = {
+        "backend_status",
+        "codes_abort",
+        "codes_begin",
+        "codes_commit",
+        "codes_status",
+        "environment_abort",
+        "environment_begin",
+        "environment_status",
+        "metadata_abort",
+        "metadata_begin",
+        "metadata_commit",
+        "metadata_status",
+        "snapshot_abort",
+        "snapshot_commit",
+        "snapshot_rollback",
+        "snapshot_status",
+        "uids_clear",
+        0,
+    };
+    static const char *prefix[] = {
+        "codes_add ",
+        "environment_add ",
+        "identity_add ",
+        "metadata_add ",
+        "snapshot_begin ",
+        "uids_add ",
+        0,
+    };
+    int index;
+
+    if (!command || !command[0]) return 0;
+    for (index = 0; exact[index]; index++) {
+        if (profile_command_exact(command, exact[index])) return 1;
+    }
+    for (index = 0; prefix[index]; index++) {
+        if (profile_command_prefix(command, prefix[index])) return 1;
+    }
+    return 0;
+}
+
+static long call_profile_kpm_control(const char *__user command_user, void *__user out_msg, int outlen)
+{
+    static const char module_name[] = "device-profile";
+    char command[KPM_ARGS_LEN];
+    long length;
+
+    if (current_uid() != 0 && !is_trusted_manager_uid(current_uid())) return -EPERM;
+    if (!command_user || !out_msg || outlen <= 0 || outlen > 4096) return -EINVAL;
+    length = compat_strncpy_from_user(command, command_user, sizeof(command));
+    if (length <= 0) return -EINVAL;
+    if (length >= sizeof(command) && command[sizeof(command) - 1]) return -E2BIG;
+    command[sizeof(command) - 1] = '\0';
+    if (!profile_command_allowed(command)) return -EPERM;
+    return module_control0(module_name, command, out_msg, outlen);
+}
+
 static long call_kpm_unload(const char *__user arg1, void *__user reserved)
 {
     char name[KPM_NAME_LEN];
@@ -274,6 +349,29 @@ static long call_kstorage_remove(int gid, long did)
 
 static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, long arg4)
 {
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+    switch (cmd) {
+    case SUPERCALL_HELLO:
+        return SUPERCALL_HELLO_MAGIC;
+    case SUPERCALL_KERNELPATCH_VER:
+        return kpver;
+    case SUPERCALL_KERNEL_VER:
+        return kver;
+    case SUPERCALL_BUILD_TIME:
+        return call_buildtime((char *__user)arg1, (int)arg2);
+#ifdef ANDROID
+    case SUPERCALL_AP_LOAD_PACKAGE_CONFIG:
+        return current_uid() == 0 ? call_ap_load_package_config() : -EPERM;
+    case SUPERCALL_SU_GET_SAFEMODE:
+        return call_su_get_safemode();
+    case SUPERCALL_PROFILE_KPM_CONTROL:
+        return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+#endif
+    default:
+        return -EPERM;
+    }
+#endif
+
     switch (cmd) {
     case SUPERCALL_HELLO:
         logki(SUPERCALL_HELLO_ECHO "\n");
@@ -292,6 +390,7 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
     #endif
     }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
     switch (cmd) {
     case SUPERCALL_SU:
         return call_su((struct su_profile * __user) arg1);
@@ -326,14 +425,19 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_list_kstorage_ids((int)arg1, (long *)arg2, (int)arg3);
     case SUPERCALL_KSTORAGE_REMOVE:
         return call_kstorage_remove((int)arg1, (long)arg2);
+    }
+#endif
 
 #ifdef ANDROID
+    switch (cmd) {
     case SUPERCALL_SU_GET_SAFEMODE:
         return call_su_get_safemode();
-#endif
+    case SUPERCALL_PROFILE_KPM_CONTROL:
+        return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
     default:
         break;
     }
+#endif
 
     switch (cmd) {
     case SUPERCALL_BOOTLOG:
@@ -359,6 +463,7 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
     }
 
     switch (cmd) {
+#ifndef KP_RESTRICTED_PROFILE_BUILD
     case SUPERCALL_KPM_LOAD:
         return call_kpm_load((const char *__user)arg1, (const char *__user)arg2, (void *__user)arg3);
     case SUPERCALL_KPM_UNLOAD:
@@ -371,6 +476,7 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_kpm_list((char *__user)arg1, (int)arg2);
     case SUPERCALL_KPM_INFO:
         return call_kpm_info((const char *__user)arg1, (char *__user)arg2, (int)arg3);
+#endif
     }
 
     switch (cmd) {
@@ -396,6 +502,12 @@ static void before(hook_fargs6_t *args, void *udata)
 
     int is_trusted_caller = 0;
     int is_authed = 0;
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+    if (uid == 0 || is_trusted_manager_uid(uid)) {
+        is_trusted_caller = 1;
+        is_authed = 1;
+    }
+#else
     if (has_preset_superkey()) {
         const char *__user key_user = (const char *__user)syscall_argn(args, 0);
         
@@ -408,9 +520,11 @@ static void before(hook_fargs6_t *args, void *udata)
     if (is_trusted_manager_uid(uid)) {
         is_trusted_caller = 1;
         is_authed = 1;
-    } else if (is_su_allow_uid(uid)) {
+    }
+    else if (is_su_allow_uid(uid)) {
         is_trusted_caller = 1;
     }
+#endif
 
     if (!is_trusted_caller) return;
 
