@@ -93,6 +93,56 @@ static long call_kpm_control(const char __user *arg1, const char *__user arg2, v
     return module_control0(name, arglen <= 0 ? 0 : args, out_msg, outlen);
 }
 
+static int profile_command_prefix(const char *command, const char *prefix);
+static int profile_command_exact(const char *command, const char *expected);
+
+#ifdef KP_KSH_RESEARCH_LAB
+static uint32_t ksh_research_control_active;
+
+static long call_ksh_research_control(
+    const char __user *module_user, const char *__user command_user,
+    void *__user out_msg, int outlen)
+{
+    static const char module_name[] = "ksh-r3-lab";
+    char module[KPM_NAME_LEN];
+    char command[KPM_ARGS_LEN];
+    long module_length;
+    long command_length;
+    uint32_t expected = 0;
+    long result;
+
+    if (!module_user || !command_user || !out_msg ||
+        outlen <= 0 || outlen > 4096)
+        return -EINVAL;
+    if (!__atomic_compare_exchange_n(
+            &ksh_research_control_active, &expected, 1, 0,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return -EBUSY;
+    module_length =
+        compat_strncpy_from_user(module, module_user, sizeof(module));
+    command_length =
+        compat_strncpy_from_user(command, command_user, sizeof(command));
+    if (module_length <= 0 || command_length <= 0) {
+        result = -EINVAL;
+        goto out;
+    }
+    module[sizeof(module) - 1] = '\0';
+    command[sizeof(command) - 1] = '\0';
+    if (!profile_command_exact(module, module_name) ||
+        (!profile_command_exact(command, "ksh capability") &&
+         !profile_command_exact(command, "ksh status") &&
+         !profile_command_prefix(command, "ksh lab "))) {
+        result = -EPERM;
+        goto out;
+    }
+    result = module_control0(module_name, command, out_msg, outlen);
+out:
+    __atomic_store_n(
+        &ksh_research_control_active, 0, __ATOMIC_RELEASE);
+    return result;
+}
+#endif
+
 static int profile_command_prefix(const char *command, const char *prefix)
 {
     while (*prefix) {
@@ -120,6 +170,8 @@ static int profile_command_allowed(const char *command)
         "environment_abort",
         "environment_begin",
         "environment_status",
+        "ksh capability",
+        "ksh status",
         "metadata_abort",
         "metadata_begin",
         "metadata_commit",
@@ -366,6 +418,13 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_su_get_safemode();
     case SUPERCALL_PROFILE_KPM_CONTROL:
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+#ifdef KP_KSH_RESEARCH_LAB
+    case SUPERCALL_KPM_CONTROL:
+        return call_ksh_research_control(
+            (const char *__user)arg1,
+            (const char *__user)arg2,
+            (char *__user)arg3, (int)arg4);
+#endif
 #endif
     default:
         return -EPERM;
@@ -498,7 +557,11 @@ int is_trusted_manager_uid(uid_t uid)
 static void before(hook_fargs6_t *args, void *udata)
 {
     int uid = current_uid();
+    long ver_xx_cmd = (long)syscall_argn(args, 1);
+    long cmd = ver_xx_cmd & 0xFFFF;
+
     if (get_ap_mod_exclude(uid)) return;
+    if (cmd < SUPERCALL_HELLO || cmd > SUPERCALL_MAX) return;
 
     int is_trusted_caller = 0;
     int is_authed = 0;
@@ -507,6 +570,12 @@ static void before(hook_fargs6_t *args, void *udata)
         is_trusted_caller = 1;
         is_authed = 1;
     }
+#ifdef KP_KSH_RESEARCH_LAB
+    else if (cmd == SUPERCALL_KPM_CONTROL) {
+        is_trusted_caller = 1;
+        is_authed = 1;
+    }
+#endif
 #else
     if (has_preset_superkey()) {
         const char *__user key_user = (const char *__user)syscall_argn(args, 0);
@@ -527,10 +596,6 @@ static void before(hook_fargs6_t *args, void *udata)
 #endif
 
     if (!is_trusted_caller) return;
-
-    long ver_xx_cmd = (long)syscall_argn(args, 1);
-    long cmd = ver_xx_cmd & 0xFFFF;
-    if (cmd < SUPERCALL_HELLO || cmd > SUPERCALL_MAX) return;
 
     // todo: from 0.10.5
     // uint32_t ver = (ver_xx_cmd & 0xFFFFFFFF00000000ul) >> 32;
