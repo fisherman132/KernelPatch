@@ -124,9 +124,30 @@ int32_t select_symbol_lookup_anchor_offset(kallsym_t *kallsym, char *img_buf, in
     return 0;
 }
 
-static int32_t get_map_anchor_offset(kallsym_t *kallsym, char *img_buf, int imglen, const char **selected)
+static int32_t get_map_anchor_offset(kallsym_t *kallsym, char *img_buf, int imglen, bool is_gki,
+                                     const char **selected)
 {
-    static const char *map_anchor_candidates[] = {
+    /*
+     * The temporary map trampoline occupies this text until paging_init()
+     * restores the original bytes.  Android 15 GKI calls tcp_init_sock()
+     * from setup_arch(), before that restoration can happen, so the network
+     * helpers are not safe first choices for GKI even though they used to be
+     * convenient cold-text anchors.  Input and SELinux audit code is reached
+     * after paging_init() on a normal boot and is therefore preferred there.
+     * Keep the legacy ordering for non-GKI vendor kernels.
+     */
+    static const char *gki_map_anchor_candidates[] = {
+        "input_handle_event",
+        "slow_avc_audit",
+        "avc_denied",
+        "nmi_panic",
+        "panic",
+        "kern_addr_valid",
+        "set_memory_rw",
+        "set_memory_ro",
+        "free_initmem",
+    };
+    static const char *legacy_map_anchor_candidates[] = {
         "tcp_init_sock",
         "udp_init_sock",
         "inet_create",
@@ -143,8 +164,13 @@ static int32_t get_map_anchor_offset(kallsym_t *kallsym, char *img_buf, int imgl
         "set_memory_ro",
         "free_initmem",
     };
+    const char **map_anchor_candidates =
+        is_gki ? gki_map_anchor_candidates : legacy_map_anchor_candidates;
+    int map_anchor_candidate_count =
+        is_gki ? (int)(sizeof(gki_map_anchor_candidates) / sizeof(gki_map_anchor_candidates[0]))
+               : (int)(sizeof(legacy_map_anchor_candidates) / sizeof(legacy_map_anchor_candidates[0]));
 
-    for (int i = 0; i < (int)(sizeof(map_anchor_candidates) / sizeof(map_anchor_candidates[0])); i++) {
+    for (int i = 0; i < map_anchor_candidate_count; i++) {
         const char *name = map_anchor_candidates[i];
         int32_t offset = get_usable_symbol_offset_try(kallsym, img_buf, imglen, name);
         if (offset) {
@@ -161,7 +187,7 @@ static int32_t get_map_anchor_offset(kallsym_t *kallsym, char *img_buf, int imgl
 void select_map_area(kallsym_t *kallsym, char *image_buf, int imglen, int32_t *map_start, int32_t *max_size, bool is_gki)
 {
     const char *selected = 0;
-    int32_t addr = get_map_anchor_offset(kallsym, image_buf, imglen, &selected);
+    int32_t addr = get_map_anchor_offset(kallsym, image_buf, imglen, is_gki, &selected);
     if (!addr) {
         tools_loge_exit("no usable map anchor symbol\n");
     }

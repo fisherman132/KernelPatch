@@ -1,4 +1,4 @@
-ARM_BUILD_GOALS := all kpimg kpimg.elf
+ARM_BUILD_GOALS := all kpimg kpimg.elf check-arm64
 ifeq ($(strip $(MAKECMDGOALS)),)
     NEED_ARM_BUILD := 1
 else ifneq ($(filter $(ARM_BUILD_GOALS),$(MAKECMDGOALS)),)
@@ -18,6 +18,8 @@ CC = $(TARGET_COMPILE)gcc
 LD = $(TARGET_COMPILE)ld
 AS = $(TARGET_COMPILE)as
 OBJCOPY = $(TARGET_COMPILE)objcopy
+NM = $(TARGET_COMPILE)nm
+OBJDUMP = $(TARGET_COMPILE)objdump
 
 X86_CC ?= gcc
 X86_LD ?= ld
@@ -25,6 +27,8 @@ X86_OBJCOPY ?= objcopy
 
 CFLAGS += -Wall -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only
 CFLAGS += -g
+
+ARM64_CHECK := scripts/check-arm64-kpimg.sh
 
 # kpimg-x86 links at 0 and runs from wherever it was injected, and the linker
 # script keeps no relocations, so every reference has to be RIP-relative.
@@ -56,6 +60,11 @@ ifdef RESTRICTED_MANAGER_CERT_SHA256
 	X86_CFLAGS += -DKP_RESTRICTED_MANAGER_CERT_SHA256=\"$(RESTRICTED_MANAGER_CERT_SHA256)\"
 endif
 endif
+
+# Android arm64 uses x18 as the shadow-call-stack pointer.  Append this only
+# after all build-profile flags: marking CFLAGS as override earlier would make
+# GNU make ignore the ordinary += assignments above (including -DANDROID).
+override CFLAGS += -ffixed-x18
 
 INCLUDE := -I. -Iinclude -Ipatch/include -Ilinux -Ilinux/include -Ilinux/arch/arm64/include -Ilinux/tools/arch/arm64/include
 
@@ -105,8 +114,13 @@ all: hdr ${TARGET} ${X86_TARGET}
 ${TARGET}: ${TARGET}.elf
 	${OBJCOPY} -O binary -S $^ $@
 
-${TARGET}.elf: ${OBJS}
-	${LD} -nostdlib -static -no-pie -Tkpimg.lds -o $@ $^
+${TARGET}.elf: ${OBJS} ${ARM64_CHECK}
+	${LD} -nostdlib -static -no-pie -Tkpimg.lds -o $@ ${OBJS}
+	${ARM64_CHECK} $@ ${NM} ${OBJDUMP}
+
+.PHONY: check-arm64
+check-arm64: ${TARGET}.elf
+	${ARM64_CHECK} $< ${NM} ${OBJDUMP}
 
 ${X86_TARGET}: ${X86_TARGET}.elf
 	${X86_OBJCOPY} -O binary -S $^ $@

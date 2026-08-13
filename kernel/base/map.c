@@ -23,6 +23,21 @@ map_data_t map_data __section(.map.data) __aligned(MAP_ALIGN) = {
 #endif
 };
 
+/*
+ * Everything reached through a direct branch while the temporary map code is
+ * executing has to live in .setup.map as well.  This code is copied from its
+ * link address into a cold kernel-text slot before paging_init(); a BL to the
+ * normal lib_memcpy in .kp.text would therefore keep the old relative
+ * displacement and jump into unrelated kernel text after the copy.
+ */
+static void __section(.map.text) __noinline map_memcpy(void *dst, const void *src, uint64_t size)
+{
+    uint8_t *d = dst;
+    const uint8_t *s = src;
+
+    for (uint64_t i = 0; i < size; i++) d[i] = s[i];
+}
+
 uint64_t __section(.map.text) __noinline __aligned(MAP_ALIGN) get_myva()
 {
     uint64_t this_va;
@@ -78,7 +93,7 @@ static void flush_icache_all(void)
 
 static __noinline void mem_proc(map_data_t *data)
 {
-    lib_memcpy(data, get_data(), sizeof(*data));
+    map_memcpy(data, get_data(), sizeof(*data));
     uint64_t kernel_va = get_kva();
 
     // relocation
