@@ -29,6 +29,34 @@
 uint32_t version = 0;
 const char *program_name = NULL;
 
+static void clear_sensitive(void *buffer, size_t length)
+{
+    volatile unsigned char *bytes = (volatile unsigned char *)buffer;
+
+    while (length > 0) {
+        *bytes++ = 0;
+        length--;
+    }
+}
+
+static int read_superkey_stdin(char output[SUPER_KEY_LEN])
+{
+    size_t length;
+
+    if (!fgets(output, SUPER_KEY_LEN, stdin)) {
+        tools_loge("failed to read superkey from stdin\n");
+        return -1;
+    }
+    length = strcspn(output, "\r\n");
+    if (length == 0 || (length == SUPER_KEY_LEN - 1 && !feof(stdin))) {
+        tools_loge("invalid superkey from stdin\n");
+        clear_sensitive(output, SUPER_KEY_LEN);
+        return -1;
+    }
+    output[length] = '\0';
+    return 0;
+}
+
 void print_usage(char **argv)
 {
     char *c =
@@ -54,8 +82,8 @@ void print_usage(char **argv)
         "Options:\n"
         "  -i, --image PATH                 Kernel image path.\n"
         "  -k, --kpimg PATH                 KernelPatch image path.\n"
-        "  -s, --skey KEY                   Set the superkey and save it directly in the boot.img.\n"
-        "  -S, --root-skey KEY              Set the root-superkey useing hash verification, and the superkey can be changed dynamically.\n"
+        "  -s, --skey KEY|-                 Set the superkey; '-' reads it from stdin.\n"
+        "  -S, --root-skey KEY|-            Set the root-superkey; '-' reads it from stdin.\n"
         "  -o, --out PATH                   Patched image path.\n"
         "  -a  --addition KEY=VALUE         Add additional information.\n"
 
@@ -147,6 +175,8 @@ int main(int argc, char *argv[])
     char *kpimg_path = NULL;
     char *out_path = NULL;
     char *superkey = NULL;
+    char superkey_stdin[SUPER_KEY_LEN] = { 0 };
+    bool clear_superkey = false;
     bool root_skey = false;
 
     int additional_num = 0;
@@ -221,6 +251,15 @@ int main(int argc, char *argv[])
     }
     int ret = 0;
 
+    if (superkey && strcmp(superkey, "-") == 0) {
+        if (read_superkey_stdin(superkey_stdin) != 0) {
+            free(extra_configs);
+            return 1;
+        }
+        superkey = superkey_stdin;
+        clear_superkey = true;
+    }
+
     if (cmd == 'h') {
         print_usage(argv);
     } else if (cmd == 'v') {
@@ -241,15 +280,19 @@ int main(int argc, char *argv[])
     } else if (cmd == 'r') {
         ret = reset_key(kimg_path, out_path, superkey);
     } else if (cmd == 'l') {
-        if (kimg_path) return print_image_patch_info_path(kimg_path);
-        if (config && config->path) return print_kpm_info_path(config->path);
-        if (kpimg_path) return print_kp_image_info_path(kpimg_path);
+        if (kimg_path)
+            ret = print_image_patch_info_path(kimg_path);
+        else if (config && config->path)
+            ret = print_kpm_info_path(config->path);
+        else if (kpimg_path)
+            ret = print_kp_image_info_path(kpimg_path);
     }
 
     else {
         print_usage(argv);
     }
 
+    if (clear_superkey) clear_sensitive(superkey_stdin, sizeof(superkey_stdin));
     free(extra_configs);
 
     return ret;
