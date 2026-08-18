@@ -220,6 +220,15 @@ static long call_profile_kpm_control(const char *__user command_user, void *__us
     return module_control0(module_name, command, out_msg, outlen);
 }
 
+static long call_profile_kpm_observer(void *__user request)
+{
+    static const char module_name[] = "device-profile";
+
+    if (current_uid() != 0) return -EPERM;
+    if (!request) return -EINVAL;
+    return module_control1(module_name, request, 0, 0);
+}
+
 static long call_kpm_unload(const char *__user arg1, void *__user reserved)
 {
     char name[KPM_NAME_LEN];
@@ -418,6 +427,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_su_get_safemode();
     case SUPERCALL_PROFILE_KPM_CONTROL:
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+    case SUPERCALL_PROFILE_KPM_OBSERVER:
+        return call_profile_kpm_observer((void *__user)arg1);
 #ifdef KP_KSH_RESEARCH_LAB
     case SUPERCALL_KPM_CONTROL:
         return call_ksh_research_control(
@@ -493,6 +504,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_su_get_safemode();
     case SUPERCALL_PROFILE_KPM_CONTROL:
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+    case SUPERCALL_PROFILE_KPM_OBSERVER:
+        return call_profile_kpm_observer((void *__user)arg1);
     default:
         break;
     }
