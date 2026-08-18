@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <zlib.h>
 #include <sys/stat.h>
@@ -20,17 +21,6 @@
 #include "lib/sha/sha1.h"
 // #include "lib/zstd/zstd.h"
 
-
-static uint64_t XXH_swap64(uint64_t x) {
-    return ((x << 56) & 0xff00000000000000ULL) |
-           ((x << 40) & 0x00ff000000000000ULL) |
-           ((x << 24) & 0x0000ff0000000000ULL) |
-           ((x << 8)  & 0x000000ff00000000ULL) |
-           ((x >> 8)  & 0x00000000ff000000ULL) |
-           ((x >> 24) & 0x0000000000ff0000ULL) |
-           ((x >> 40) & 0x000000000000ff00ULL) |
-           ((x >> 56) & 0x00000000000000ffULL);
-}
 
 static uint32_t XXH_swap32(uint32_t x) {
     return ((x >> 24) & 0x000000FF) |
@@ -262,6 +252,7 @@ int compress_lz4_le(
     uint32_t *out_size,
     compress_head k_head
 ) {
+    (void)k_head;
 
     size_t max_blocks =
         (in_size + LZ4_BLOCK_SIZE - 1) / LZ4_BLOCK_SIZE;
@@ -519,7 +510,7 @@ int auto_depress(const uint8_t *data, size_t size, const char *out_path) {
             if (block_size == 0)
                 break;
 
-            if (block_size > LZ4_compressBound(LZ4_BLOCK_SIZE))
+            if (block_size > (uint32_t)LZ4_compressBound(LZ4_BLOCK_SIZE))
                 goto fail;
 
             if (p + block_size > end)
@@ -772,7 +763,6 @@ int repack_bootimg(const char *orig_boot_path,
     fseek(f_orig, 0, SEEK_END);
     long total_size = ftell(f_orig);
 
-    uint32_t avb_size = 0;
     //uint8_t *foot_buf = NULL;
     //foot_buf = malloc(64);
     fseek(f_orig, total_size-sizeof(avb), SEEK_SET);
@@ -987,7 +977,7 @@ int repack_bootimg(const char *orig_boot_path,
             }
             
             if (header_ver == 2){
-                tools_logi("dtb_size=%d,dtb_addr=%lu\n",hdr.dtb_size,hdr.dtb_addr);
+                tools_logi("dtb_size=%d,dtb_addr=%" PRIu64 "\n",hdr.dtb_size,hdr.dtb_addr);
                 sha1_update(&ctx, (const BYTE *)rest_buf + checksum_aligned, hdr.dtb_size);
                 sha1_update(&ctx, (const BYTE *)&hdr.dtb_size, 4);
             }
@@ -1077,8 +1067,8 @@ int repack_bootimg(const char *orig_boot_path,
 
     //  Padding
     //tools_logi("current_post=%d,total_size=%d\n",current_pos,total_size);
-    if (current_pos < total_size - sizeof(avb)) {
-        uint32_t padding = total_size - current_pos - sizeof(avb);
+    if (current_pos < total_size - (long)sizeof(avb)) {
+        uint32_t padding = (uint32_t)(total_size - current_pos - (long)sizeof(avb));
         uint8_t *zero_pad = calloc(1, padding);
         fwrite(zero_pad, 1, padding, f_out);
         free(zero_pad);

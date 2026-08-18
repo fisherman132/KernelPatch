@@ -595,6 +595,11 @@ void sendMTFValues ( EState* s )
 
    if (s->verbosity >= 3)
       VPrintf1( "codes %d\n", s->numZ-nBytes );
+
+#ifdef BZ_NO_STDIO
+   (void)totc;
+   (void)nBytes;
+#endif
 }
 
 

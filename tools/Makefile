@@ -1,4 +1,4 @@
-CFLAGS = -std=c11 -Wall -Wextra -Wno-unused -Wno-unused-parameter
+CFLAGS = -std=c11 -Wall -Wextra -Werror
 
 CFLAGS += -I. -I./lib -DBZ_NO_STDIO -DXZ_DEC_ANY_CHECK
 LDFLAGS = -lz
@@ -7,7 +7,7 @@ ifdef DEBUG
     CFLAGS += -DDEBUG -g
 endif
 
-OBJS := image.o kallsym.o kptools.o order.o insn.o patch.o symbol.o kpm.o common.o bootimg.o x86_64.o
+OBJS := image.o kallsym.o kptools.o order.o insn.o patch.o symbol.o kpm.o common.o bootimg.o x86_64.o key_input.o
 
 LIB_SRCS := $(wildcard lib/*.c) $(wildcard lib/*/*.c)
 LIB_OBJS := $(LIB_SRCS:.c=.o)
@@ -33,3 +33,7 @@ clean:
 	rm lib/lz4/*.o
 	rm lib/sha/*.o
 	rm lib/xz/*.o
+
+.PHONY: test
+test:
+	sh tests/test_stdin_key.sh

@@ -25,12 +25,20 @@
 #include "common.h"
 #include "kpm.h"
 #include "x86_64.h"
+#include "key_input.h"
 
 uint32_t version = 0;
 const char *program_name = NULL;
+static char stdin_superkey[SUPER_KEY_LEN];
+
+static void clear_stdin_superkey(void)
+{
+    key_input_secure_clear(stdin_superkey, sizeof(stdin_superkey));
+}
 
 void print_usage(char **argv)
 {
+    (void)argv;
     char *c =
         "Kernel Image Patch Tools. version: %x\n"
         "\n"
@@ -54,8 +62,9 @@ void print_usage(char **argv)
         "Options:\n"
         "  -i, --image PATH                 Kernel image path.\n"
         "  -k, --kpimg PATH                 KernelPatch image path.\n"
-        "  -s, --skey KEY                   Set the superkey and save it directly in the boot.img.\n"
-        "  -S, --root-skey KEY              Set the root-superkey useing hash verification, and the superkey can be changed dynamically.\n"
+        "  -s, --skey KEY|-                 Set the superkey and save it directly in the boot.img.\n"
+        "  -S, --root-skey KEY|-            Set the root-superkey using hash verification; it can be changed dynamically.\n"
+        "                                   Use '-' to read one key line (max 63 bytes, LF or CRLF) from stdin.\n"
         "  -o, --out PATH                   Patched image path.\n"
         "  -a  --addition KEY=VALUE         Add additional information.\n"
 
@@ -77,6 +86,10 @@ int main(int argc, char *argv[])
 {
     version = (MAJOR << 16) + (MINOR << 8) + PATCH;
     program_name = argv[0];
+    if (atexit(clear_stdin_superkey) != 0) {
+        fprintf(stderr, "failed to register key buffer cleanup\n");
+        return EXIT_FAILURE;
+    }
     if (argc > 3 && strcmp(argv[1], "unpack-bzimage") == 0) {
         set_log_enable(true);
         x86_bzimage_t image;
@@ -146,7 +159,7 @@ int main(int argc, char *argv[])
     char *kimg_path = NULL;
     char *kpimg_path = NULL;
     char *out_path = NULL;
-    char *superkey = NULL;
+    const char *superkey = NULL;
     bool root_skey = false;
 
     int additional_num = 0;
@@ -181,7 +194,10 @@ int main(int argc, char *argv[])
             break;
         case 'S':
             root_skey = true;
+            superkey = optarg;
+            break;
         case 's':
+            root_skey = false;
             superkey = optarg;
             break;
         case 'o':
@@ -210,7 +226,7 @@ int main(int argc, char *argv[])
             config->set_event = optarg;
             break;
         case 'N':
-            config->name = optarg;
+            config->set_name = optarg;
             break;
         case 'A':
             config->set_args = optarg;
@@ -220,6 +236,28 @@ int main(int argc, char *argv[])
         }
     }
     int ret = 0;
+    key_input_status_t key_status = KEY_INPUT_OK;
+
+    if (cmd == 'r' && root_skey) {
+        fprintf(stderr, "reset superkey does not support -S; use -s KEY or -s -\n");
+        ret = EXIT_FAILURE;
+        goto out;
+    }
+    if ((cmd == 'p' || cmd == 'r') && superkey && strcmp(superkey, "-") == 0) {
+        key_status = key_input_resolve(superkey, STDIN_FILENO, stdin_superkey,
+                                       sizeof(stdin_superkey), &superkey);
+        if (key_status != KEY_INPUT_OK) {
+            fprintf(stderr, "stdin superkey rejected: %s\n",
+                    key_input_status_message(key_status));
+            ret = EXIT_FAILURE;
+            goto out;
+        }
+    }
+    if (cmd == 'r' && !superkey) {
+        fprintf(stderr, "reset superkey requires -s KEY or -s -\n");
+        ret = EXIT_FAILURE;
+        goto out;
+    }
 
     if (cmd == 'h') {
         print_usage(argv);
@@ -241,15 +279,20 @@ int main(int argc, char *argv[])
     } else if (cmd == 'r') {
         ret = reset_key(kimg_path, out_path, superkey);
     } else if (cmd == 'l') {
-        if (kimg_path) return print_image_patch_info_path(kimg_path);
-        if (config && config->path) return print_kpm_info_path(config->path);
-        if (kpimg_path) return print_kp_image_info_path(kpimg_path);
+        if (kimg_path)
+            ret = print_image_patch_info_path(kimg_path);
+        else if (config && config->path)
+            ret = print_kpm_info_path(config->path);
+        else if (kpimg_path)
+            ret = print_kp_image_info_path(kpimg_path);
     }
 
     else {
         print_usage(argv);
     }
 
+out:
+    clear_stdin_superkey();
     free(extra_configs);
 
     return ret;

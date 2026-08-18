@@ -76,8 +76,6 @@ int find_linux_banner(kallsym_t *info, char *img, int32_t imglen, void *opt)
     banner = img + info->linux_banner_offset[info->banner_num - 1];
 
     char *uts_release_start = banner + prefix_len;
-    char *space = strchr(banner + prefix_len, ' ');
-
     char *dot = NULL;
 
     // VERSION
@@ -95,21 +93,10 @@ int find_linux_banner(kallsym_t *info, char *img, int32_t imglen, void *opt)
 }
 
 
-static int dump_kernel_config(kallsym_t *info, char *img, int32_t imglen)
-{
-    // todo:
-    /*
-  kernel configuration
-  when CONFIG_IKCONFIG is enabled
-  archived in GZip format between the magic string 'IKCFG_ST' and 'IKCFG_ED' in
-  the built kernel.
-  */
-    tools_logw("not implemented\n");
-    return 0;
-}
-
 static int find_token_table(kallsym_t *info, char *img, int32_t imglen, void *opt)
 {
+    (void)opt;
+
     char nums_syms[20] = { '\0' };
     for (int32_t i = 0; i < 10; i++)
         nums_syms[i * 2] = '0' + i;
@@ -171,6 +158,8 @@ static int find_token_table(kallsym_t *info, char *img, int32_t imglen, void *op
 
 static int find_token_index(kallsym_t *info, char *img, int32_t imglen, void *opt)
 {
+    (void)opt;
+
     uint16_t le_index[KSYM_TOKEN_NUMS] = { 0 };
     uint16_t be_index[KSYM_TOKEN_NUMS] = { 0 };
 
@@ -212,15 +201,6 @@ static int get_markers_elem_size(kallsym_t *info)
     if (info->version.major < 4 || (info->version.major == 4 && info->version.minor < 20))
         elem_size = info->asm_PTR_size;
 
-    return elem_size;
-}
-
-static int get_num_syms_elem_size(kallsym_t *info)
-{
-    // the same as kallsyms_markers
-    int32_t elem_size = info->asm_long_size;
-    if (info->version.major < 4 || (info->version.major == 4 && info->version.minor < 20))
-        elem_size = info->asm_PTR_size;
     return elem_size;
 }
 
@@ -492,9 +472,9 @@ static int32_t find_approx_addresses_or_offset(kallsym_t *info, char *img, int32
 static int find_num_syms(kallsym_t *info, char *img, int32_t imglen)
 {
 #define NSYMS_MAX_GAP 10
+    (void)imglen;
 
     int32_t approx_end = info->kallsyms_names_offset;
-    // int32_t num_syms_elem_size = get_num_syms_elem_size(info);
     int32_t num_syms_elem_size = 4;
 
     int32_t approx_num_syms = info->_approx_addresses_or_offsets_num;
@@ -599,23 +579,6 @@ static int decompress_symbol_name(kallsym_t *info, char *img, int32_t *pos_to_ne
     return 0;
 }
 
-static int is_symbol_name_pos(kallsym_t *info, char *img, int32_t pos, char *symbol)
-{
-    int32_t len = *(uint8_t *)(img + pos++);
-    if (len > 0x7F) len = (len & 0x7F) + (*(uint8_t *)(img + pos++) << 7);
-    if (!len || len >= KSYM_SYMBOL_LEN) return 0;
-    int32_t symidx = 0;
-    for (int32_t i = 0; i < len; i++) {
-        int32_t tokidx = *(uint8_t *)(img + pos + i);
-        char *token = info->kallsyms_token_table[tokidx];
-        if (!i) token++; // ignore symbol type
-        int32_t toklen = strlen(token);
-        if (strncmp(symbol + symidx, token, toklen)) break;
-        symidx += toklen;
-    }
-    return (int32_t)strlen(symbol) == symidx;
-}
-
 static int verify_names_candidate(kallsym_t *info, char *img, int32_t marker_elem_size, int32_t cand)
 {
     int32_t pos = cand;
@@ -652,6 +615,8 @@ static int verify_names_candidate(kallsym_t *info, char *img, int32_t marker_ele
 
 static int find_names(kallsym_t *info, char *img, int32_t imglen)
 {
+    (void)imglen;
+
     int32_t marker_elem_size = get_markers_elem_size(info);
 
     if (info->_marker_num > KSYM_FIND_NAMES_USED_MARKER) {
@@ -727,6 +692,8 @@ static int arm64_verify_pid_vnr(kallsym_t *info, char *img, int32_t offset)
 
 static int correct_addresses_or_offsets_by_vectors(kallsym_t *info, char *img, int32_t imglen)
 {
+    (void)imglen;
+
     // vectors .align 11
     // todo: tramp_vectors .align 11
     int32_t pos = info->kallsyms_names_offset;
@@ -820,6 +787,8 @@ static int correct_addresses_or_offsets_by_vectors(kallsym_t *info, char *img, i
 
 static int correct_addresses_or_offsets_by_banner(kallsym_t *info, char *img, int32_t imglen)
 {
+    (void)imglen;
+
     int32_t pos = info->kallsyms_names_offset;
     int32_t index = 0;
     char symbol[KSYM_SYMBOL_LEN] = { '\0' };
@@ -1079,7 +1048,6 @@ int get_symbol_offset_and_size(kallsym_t *info, char *img, char *symbol, int32_t
     char decomp[KSYM_SYMBOL_LEN] = { '\0' };
     char type = 0;
     *size = 0;
-    char **tokens = info->kallsyms_token_table;
     int32_t pos = info->kallsyms_names_offset;
     for (int32_t i = 0; i < info->kallsyms_num_syms; i++) {
         memset(decomp, 0, sizeof(decomp));
@@ -1106,7 +1074,6 @@ int get_symbol_offset(kallsym_t *info, char *img, char *symbol)
 {
     char decomp[KSYM_SYMBOL_LEN] = { '\0' };
     char type = 0;
-    char **tokens = info->kallsyms_token_table;
     int32_t pos = info->kallsyms_names_offset;
     for (int32_t i = 0; i < info->kallsyms_num_syms; i++) {
         memset(decomp, 0, sizeof(decomp));
@@ -1125,7 +1092,6 @@ int dump_all_symbols(kallsym_t *info, char *img)
 {
     char symbol[KSYM_SYMBOL_LEN] = { '\0' };
     char type = 0;
-    char **tokens = info->kallsyms_token_table;
     int32_t pos = info->kallsyms_names_offset;
     for (int32_t i = 0; i < info->kallsyms_num_syms; i++) {
         memset(symbol, 0, sizeof(symbol));
@@ -1182,7 +1148,7 @@ int dump_all_ikconfig(char *img, int32_t imglen)
 
     memcpy(extracted_data, img + kcfg_start, kcfg_bytes);
 
-    int ret = decompress_data(extracted_data, kcfg_bytes);
+    decompress_data(extracted_data, kcfg_bytes);
 
     free(extracted_data);
 
@@ -1251,7 +1217,6 @@ int on_each_symbol(kallsym_t *info, char *img, void *userdata,
 {
     char symbol[KSYM_SYMBOL_LEN] = { '\0' };
     char type = 0;
-    char **tokens = info->kallsyms_token_table;
     int32_t pos = info->kallsyms_names_offset;
     for (int32_t i = 0; i < info->kallsyms_num_syms; i++) {
         memset(symbol, 0, sizeof(symbol));

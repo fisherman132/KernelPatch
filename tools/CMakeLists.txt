@@ -18,6 +18,7 @@ set(SOURCES
     common.c
     bootimg.c
     x86_64.c
+    key_input.c
 )
 
 add_executable(
@@ -25,6 +26,10 @@ add_executable(
     ${SOURCES}
     ${LIB_SOURCES}
 )
+
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(kptools PRIVATE -Wall -Wextra -Werror)
+endif()
 
 file(GLOB_RECURSE ALL_HEADERS "lib/*.h")
 set(LIB_INCLUDE_DIRS "")

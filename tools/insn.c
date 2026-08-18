@@ -1296,6 +1296,7 @@ static bool __check_le(uint64_t pstate)
 
 static bool __check_al(uint64_t pstate)
 {
+    (void)pstate;
     return true;
 }
 

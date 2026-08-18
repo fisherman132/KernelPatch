@@ -26,6 +26,7 @@
 #include "symbol.h"
 #include "kpm.h"
 #include "x86_64.h"
+#include "key_input.h"
 #include "lib/sha/sha256.h"
 
 void read_kernel_file(const char *path, kernel_file_t *kernel_file)
@@ -232,14 +233,12 @@ static bool is_legacy_kconfig_extra(const patch_extra_item_t *item)
            item->type == EXTRA_TYPE_KCONFIG_LEGACY && !strcmp(item->name, EXTRA_TYPE_KCONFIG_LEGACY_STR);
 }
 
-static char *bytes_to_hexstr(const unsigned char *data, int len)
+static bool buffer_is_configured(const uint8_t *buffer, size_t size)
 {
-    char *buf = (char *)malloc(2 * len + 1);
-    buf[2 * len] = '\0';
-    for (int i = 0; i < len; i++) {
-        sprintf(&buf[2 * i], "%02x", data[i]);
+    for (size_t i = 0; i < size; i++) {
+        if (buffer[i] != 0) return true;
     }
-    return buf;
+    return false;
 }
 
 void print_preset_info(preset_t *preset)
@@ -257,13 +256,14 @@ void print_preset_info(preset_t *preset)
     fprintf(stdout, "compile_time=%s\n", header->compile_time);
     fprintf(stdout, "config=%s,%s\n", is_android ? "android" : "linux", is_debug ? "debug" : "release");
     fprintf(stdout, "arch=%s\n", is_x86_64 ? "x86_64" : "arm64");
-    fprintf(stdout, "superkey=%s\n", setup->superkey);
+    fprintf(stdout, "superkey=%s\n", setup->superkey[0] ? "<configured>" : "<unset>");
 
     // todo: remove compat version
     if (ver_num > 0xa04) {
-        char *hexstr = bytes_to_hexstr(setup->root_superkey, ROOT_SUPER_KEY_HASH_LEN);
-        fprintf(stdout, "root_superkey=%s\n", hexstr);
-        free(hexstr);
+        fprintf(stdout, "root_superkey=%s\n",
+                buffer_is_configured(setup->root_superkey, ROOT_SUPER_KEY_HASH_LEN)
+                    ? "<configured>"
+                    : "<unset>");
     }
 
     fprintf(stdout, INFO_ADDITIONAL_SESSION "\n");
@@ -566,6 +566,8 @@ static int patch_update_x86(const char *kimg_path, const char *kpimg_path, const
         sha256_update(&ctx, (const BYTE *)superkey, strnlen(superkey, SUPER_KEY_LEN));
         sha256_final(&ctx, digest);
         memcpy(setup->root_superkey, digest, ROOT_SUPER_KEY_HASH_LEN);
+        key_input_secure_clear(digest, sizeof(digest));
+        key_input_secure_clear(&ctx, sizeof(ctx));
     }
 
     int rc = inject_x86_kpimg(&image, kpimg, kpimg_len);
@@ -650,7 +652,6 @@ int patch_update_img(const char *kimg_path, const char *kpimg_path, const char *
 
     // extra
     int extra_size = 0;
-    int extra_num = 0;
 
     for (int i = 0; i < extra_config_num; i++) {
         extra_config_t *config = extra_configs + i;
@@ -726,7 +727,6 @@ int patch_update_img(const char *kimg_path, const char *kpimg_path, const char *
 
     for (int i = 0; i < extra_config_num; i++) {
         extra_config_t *config = extra_configs + i;
-        extra_num++;
         extra_size += sizeof(patch_extra_item_t);
         extra_size += config->item->args_size;
         extra_size += config->item->con_size;
@@ -844,7 +844,7 @@ int patch_update_img(const char *kimg_path, const char *kpimg_path, const char *
 
     // superkey
     if (!root_key) {
-        tools_logi("superkey: %s\n", superkey);
+        tools_logi("superkey: configured\n");
         strncpy((char *)setup->superkey, superkey, SUPER_KEY_LEN - 1);
     } else if (superkey && superkey[0] != '\0') {
         int len = SHA256_BLOCK_SIZE > ROOT_SUPER_KEY_HASH_LEN ? ROOT_SUPER_KEY_HASH_LEN : SHA256_BLOCK_SIZE;
@@ -854,9 +854,9 @@ int patch_update_img(const char *kimg_path, const char *kpimg_path, const char *
         sha256_update(&ctx, (const BYTE *)superkey, strnlen(superkey, SUPER_KEY_LEN));
         sha256_final(&ctx, buf);
         memcpy(setup->root_superkey, buf, len);
-        char *hexstr = bytes_to_hexstr(setup->root_superkey, len);
-        tools_logi("root superkey hash: %s\n", hexstr);
-        free(hexstr);
+        tools_logi("root superkey hash: configured\n");
+        key_input_secure_clear(buf, sizeof(buf));
+        key_input_secure_clear(&ctx, sizeof(ctx));
     } else {
         memset(setup->root_superkey, 0, ROOT_SUPER_KEY_HASH_LEN);
         tools_logi("root_key mode with empty superkey: root_superkey zeroed\n");
@@ -997,13 +997,11 @@ int reset_key(const char *kimg_path, const char *out_path, const char *superkey)
     preset_t *preset = get_preset(kernel_file.kimg, kernel_file.kimg_len);
     if (!preset) tools_loge_exit("not patched kernel image\n");
 
-    char *origin_key = strdup((char *)preset->setup.superkey);
     strcpy((char *)preset->setup.superkey, superkey);
-    tools_logi("reset superkey: %s -> %s\n", origin_key, preset->setup.superkey);
+    tools_logi("reset superkey: configured\n");
 
     write_kernel_file(&kernel_file, out_path);
 
-    free(origin_key);
     free_kernel_file(&kernel_file);
 
     return 0;

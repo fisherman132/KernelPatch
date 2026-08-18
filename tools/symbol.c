@@ -14,6 +14,7 @@ struct on_each_symbol_struct
 
 static int32_t on_each_symbol_callbackup(int32_t index, char type, const char *symbol, int32_t offset, void *userdata)
 {
+    (void)index;
     struct on_each_symbol_struct *data = (struct on_each_symbol_struct *)userdata;
     int len = strlen(data->symbol);
     if (strstr(symbol, data->symbol) == symbol && (symbol[len] == '.' || symbol[len] == '$') &&
@@ -53,23 +54,6 @@ int32_t try_get_symbol_offset_zero(kallsym_t *info, char *img, char *symbol)
     int32_t offset = get_symbol_offset(info, img, symbol);
     if (offset > 0) return offset;
     return find_suffixed_symbol(info, img, symbol);
-}
-
-static int get_cand_arr_symbol_offset_try(kallsym_t *kallsym, char *img_buf, const char **cand_arr, int cand_num,
-                                          const char **selected)
-{
-    int offset = 0;
-
-    for (int i = 0; i < cand_num; i++) {
-        offset = try_get_symbol_offset_zero(kallsym, img_buf, (char *)cand_arr[i]);
-        if (offset) {
-            if (selected) *selected = cand_arr[i];
-            return offset;
-        }
-    }
-
-    if (selected) *selected = 0;
-    return 0;
 }
 
 bool is_usable_symbol_offset(int32_t offset, int imglen)
@@ -212,7 +196,7 @@ void select_map_area(kallsym_t *kallsym, char *image_buf, int imglen, int32_t *m
     uint32_t count = 0;
     uint32_t asmbit = sizeof(uint32_t);
     bool is_first_pac = false;
-    for (uint32_t i = 0; i < *max_size; i += asmbit) {
+    for (uint32_t i = 0; i < (uint32_t)*max_size; i += asmbit) {
         uint32_t insn = *(uint32_t *)(image_buf + addr + i);
         if (!is_first_pac && insn == PAC && i < asmbit * 5) {
             is_first_pac = true;
@@ -232,7 +216,7 @@ void select_map_area(kallsym_t *kallsym, char *image_buf, int imglen, int32_t *m
         tools_logi("pac verify not pair  pos: %x  count: %d\n", pos, count);
 
         uint32_t second_pos = 0;
-        for (uint32_t j = *max_size; j < *max_size * 2; j += asmbit) {
+        for (uint32_t j = (uint32_t)*max_size; j < (uint32_t)(*max_size * 2); j += asmbit) {
             uint32_t insn = *(uint32_t *)(image_buf + addr + j);
             if ((insn & 0xFFFFFD1F) == 0xD503211F) {
                 second_pos = j;
@@ -296,16 +280,6 @@ int fillin_map_symbol(kallsym_t *kallsym, char *img_buf, map_symbol_t *symbol, i
         }
     }
     return 0;
-}
-
-static int get_cand_arr_symbol_offset_zero(kallsym_t *kallsym, char *img_buf, char **cand_arr, int cand_num)
-{
-    int offset = 0;
-    for (int i = 0; i < cand_num; i++) {
-        offset = get_symbol_offset_zero(kallsym, img_buf, cand_arr[i]);
-        if (offset) break;
-    }
-    return offset;
 }
 
 int fillin_patch_config(kallsym_t *kallsym, char *img_buf, int imglen, patch_config_t *symbol, int32_t target_is_be,
