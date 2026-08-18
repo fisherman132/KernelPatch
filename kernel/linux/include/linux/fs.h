@@ -273,9 +273,11 @@ static inline ssize_t kernel_read(struct file *file, void *buf, size_t count, lo
     if (kfunc(kernel_read)) {
         if (kver < VERSION(4, 14, 0)) {
             loff_t offset = pos ? *pos : 0;
-            int (*kernel_read_legacy)(struct file *file, loff_t offset, char *addr, unsigned long count) =
-                (typeof(kernel_read_legacy))kfunc(kernel_read);
-            int rc = kernel_read_legacy(file, offset, (char *)buf, count);
+            union {
+                typeof(kfunc(kernel_read)) modern_fn;
+                int (*legacy_fn)(struct file *file, loff_t offset, char *addr, unsigned long count);
+            } fn = { .modern_fn = kfunc(kernel_read) };
+            int rc = fn.legacy_fn(file, offset, (char *)buf, count);
             if (pos && rc > 0) {
                 *pos = offset + rc;
             }
@@ -294,10 +296,12 @@ static inline ssize_t kernel_write(struct file *file, const void *buf, size_t co
     ssize_t ret = 0;
     if (kfunc(kernel_write)) {
         if (kver < VERSION(4, 14, 0)) {
-            ssize_t (*kernel_write_legacy)(struct file *file, const char *buf, size_t count, loff_t pos) =
-                (typeof(kernel_write_legacy))kfunc(kernel_write);
+            union {
+                typeof(kfunc(kernel_write)) modern_fn;
+                ssize_t (*legacy_fn)(struct file *file, const char *buf, size_t count, loff_t pos);
+            } fn = { .modern_fn = kfunc(kernel_write) };
             loff_t offset = pos ? *pos : 0;
-            ssize_t result = kernel_write_legacy(file, buf, count, offset);
+            ssize_t result = fn.legacy_fn(file, buf, count, offset);
             if (pos && result > 0) {
                 *pos = offset + result;
             }

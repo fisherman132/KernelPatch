@@ -171,6 +171,9 @@ int kfunc_def(unshare_files)(struct files_struct **displaced) = 0;
 
 static void _linux_kernel_fork_sym_match(const char *name, unsigned long addr)
 {
+    (void)name;
+    (void)addr;
+
     // kfunc_match(pidfd_pid, name, addr);
     // kfunc_match(get_mm_exe_file, name, addr);
     // kfunc_match(free_task, name, addr);
@@ -593,6 +596,9 @@ int kfunc_def(security_sidtab_hash_stats)(char *page) = 0;
 
 static void _linux_security_selinux_sym_match(const char *name, unsigned long addr)
 {
+    (void)name;
+    (void)addr;
+
     // kvar_match(selinux_enabled_boot, name, addr);
     // kvar_match(selinux_enabled, name, addr);
     // kvar_match(selinux_state, name, addr);
@@ -851,6 +857,8 @@ static void _linux_sched_mm_init(const char *name, unsigned long addr)
 
 static int _linux_misc_symbol_init(void *data, const char *name, struct module *m, unsigned long addr)
 {
+    (void)data;
+    (void)m;
     _linux_kernel_cred_sym_match(name, addr);
     _linux_kernel_pid_sym_match(name, addr);
     _linux_kernel_stop_machine_sym_match(name, addr);

@@ -162,6 +162,11 @@ static int reloc_insn_imm(enum aarch64_reloc_op op, void *place, u64 val, int ls
 int apply_relocate(Elf64_Shdr *sechdrs, const char *strtab, unsigned int symindex, unsigned int relsec,
                    struct module *me)
 {
+    (void)sechdrs;
+    (void)strtab;
+    (void)symindex;
+    (void)relsec;
+    (void)me;
     return 0;
 };
 
@@ -175,6 +180,9 @@ int apply_relocate_add(Elf64_Shdr *sechdrs, const char *strtab, unsigned int sym
     void *loc;
     u64 val;
     Elf64_Rela *rel = (void *)sechdrs[relsec].sh_addr;
+
+    (void)strtab;
+    (void)me;
 
     for (i = 0; i < sechdrs[relsec].sh_size / sizeof(*rel); i++) {
         /* loc corresponds to P in the AArch64 ELF document. */
@@ -218,16 +226,19 @@ int apply_relocate_add(Elf64_Shdr *sechdrs, const char *strtab, unsigned int sym
         /* MOVW instruction relocations. */
         case R_AARCH64_MOVW_UABS_G0_NC:
             overflow_check = false;
+            __attribute__((fallthrough));
         case R_AARCH64_MOVW_UABS_G0:
             ovf = reloc_insn_movw(RELOC_OP_ABS, loc, val, 0, AARCH64_INSN_IMM_16);
             break;
         case R_AARCH64_MOVW_UABS_G1_NC:
             overflow_check = false;
+            __attribute__((fallthrough));
         case R_AARCH64_MOVW_UABS_G1:
             ovf = reloc_insn_movw(RELOC_OP_ABS, loc, val, 16, AARCH64_INSN_IMM_16);
             break;
         case R_AARCH64_MOVW_UABS_G2_NC:
             overflow_check = false;
+            __attribute__((fallthrough));
         case R_AARCH64_MOVW_UABS_G2:
             ovf = reloc_insn_movw(RELOC_OP_ABS, loc, val, 32, AARCH64_INSN_IMM_16);
             break;
@@ -280,6 +291,7 @@ int apply_relocate_add(Elf64_Shdr *sechdrs, const char *strtab, unsigned int sym
             break;
         case R_AARCH64_ADR_PREL_PG_HI21_NC:
             overflow_check = false;
+            __attribute__((fallthrough));
         case R_AARCH64_ADR_PREL_PG_HI21:
             ovf = reloc_insn_imm(RELOC_OP_PAGE, loc, val, 12, 21, AARCH64_INSN_IMM_ADR);
             break;

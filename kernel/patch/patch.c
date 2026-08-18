@@ -34,6 +34,8 @@ void print_bootlog()
 
 void before_panic(hook_fargs12_t *args, void *udata)
 {
+    (void)args;
+    (void)udata;
     printk("==== Start KernelPatch for Kernel panic ====\n");
     print_bootlog();
     printk("==== End KernelPatch for Kernel panic ====\n");
@@ -62,6 +64,8 @@ int android_sepolicy_flags_fix();
 
 static void before_rest_init(hook_fargs4_t *args, void *udata)
 {
+    (void)args;
+    (void)udata;
     int rc = 0;
     log_boot("entering init ...\n");
 
@@ -136,11 +140,15 @@ KP_EXPORT_SYMBOL(extra_event_init);
 
 static void before_kernel_init(hook_fargs4_t *args, void *udata)
 {
+    (void)args;
+    (void)udata;
     extra_event_init(EXTRA_EVENT_PRE_KERNEL_INIT);
 }
 
 static void after_kernel_init(hook_fargs4_t *args, void *udata)
 {
+    (void)args;
+    (void)udata;
     extra_event_init(EXTRA_EVENT_POST_KERNEL_INIT);
 }
 

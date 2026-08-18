@@ -24,12 +24,14 @@
 
 static void before_policydb_write(hook_fargs2_t *args, void *udata)
 {
+    (void)udata;
     struct _policy_file *fp = (struct _policy_file *)args->arg1;
     args->local.data0 = (uint64_t)fp->data;
 }
 
 static void after_policydb_write(hook_fargs2_t *args, void *udata)
 {
+    (void)udata;
     struct _policydb *p = (struct _policydb *)args->arg0;
     char *data = (char *)args->local.data0;
 

@@ -265,6 +265,8 @@ static void _linux_include_kernel_sym_match(const char *name, unsigned long addr
 
 static void _linux_libs_symbol_init(void *data, const char *name, struct module *m, unsigned long addr)
 {
+    (void)data;
+    (void)m;
     _linux_lib_misc(name, addr);
     _linux_lib_strncpy_from_user_sym_match(name, addr);
     _linux_lib_string_sym_match(name, addr);
@@ -276,6 +278,8 @@ static void _linux_libs_symbol_init(void *data, const char *name, struct module 
 void linux_libs_symbol_init(const char *name, unsigned long addr)
 {
 #ifdef INIT_USE_KALLSYMS_LOOKUP_NAME
+    (void)name;
+    (void)addr;
     _linux_libs_symbol_init(0, 0, 0, 0);
 #else
     kallsyms_on_each_symbol(_linux_libs_symbol_init, 0);

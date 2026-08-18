@@ -41,6 +41,9 @@
 
 static long call_test(long arg1, long arg2, long arg3)
 {
+    (void)arg1;
+    (void)arg2;
+    (void)arg3;
     return 0;
 }
 
@@ -75,6 +78,7 @@ static long call_buildtime(char __user *out_buildtime, int u_len)
     return rc;
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_kpm_load(const char __user *arg1, const char *__user arg2, void *__user reserved)
 {
     char path[1024], args[KPM_ARGS_LEN];
@@ -92,12 +96,43 @@ static long call_kpm_control(const char __user *arg1, const char *__user arg2, v
     long arglen = compat_strncpy_from_user(args, arg2, sizeof(args));
     return module_control0(name, arglen <= 0 ? 0 : args, out_msg, outlen);
 }
+#endif
 
+#ifdef ANDROID
 static int profile_command_prefix(const char *command, const char *prefix);
 static int profile_command_exact(const char *command, const char *expected);
 
 #ifdef KP_KSH_RESEARCH_LAB
 static uint32_t ksh_research_control_active;
+
+static int ksh_research_control_try_lock(void)
+{
+    uint32_t observed;
+    uint32_t status;
+    uint32_t locked = 1;
+
+    asm volatile(
+        "1: ldaxr %w0, %2\n"
+        "   cmp %w0, #0\n"
+        "   b.ne 2f\n"
+        "   stlxr %w1, %w3, %2\n"
+        "   cbnz %w1, 1b\n"
+        "2:"
+        : "=&r"(observed), "=&r"(status), "+Q"(ksh_research_control_active)
+        : "r"(locked)
+        : "cc", "memory");
+    return observed == 0;
+}
+
+static void ksh_research_control_unlock(void)
+{
+    uint32_t unlocked = 0;
+
+    asm volatile("stlr %w1, %0"
+                 : "=Q"(ksh_research_control_active)
+                 : "r"(unlocked)
+                 : "memory");
+}
 
 static long call_ksh_research_control(
     const char __user *module_user, const char *__user command_user,
@@ -108,15 +143,12 @@ static long call_ksh_research_control(
     char command[KPM_ARGS_LEN];
     long module_length;
     long command_length;
-    uint32_t expected = 0;
     long result;
 
     if (!module_user || !command_user || !out_msg ||
         outlen <= 0 || outlen > 4096)
         return -EINVAL;
-    if (!__atomic_compare_exchange_n(
-            &ksh_research_control_active, &expected, 1, 0,
-            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+    if (!ksh_research_control_try_lock())
         return -EBUSY;
     module_length =
         compat_strncpy_from_user(module, module_user, sizeof(module));
@@ -137,8 +169,7 @@ static long call_ksh_research_control(
     }
     result = module_control0(module_name, command, out_msg, outlen);
 out:
-    __atomic_store_n(
-        &ksh_research_control_active, 0, __ATOMIC_RELEASE);
+    ksh_research_control_unlock();
     return result;
 }
 #endif
@@ -214,7 +245,7 @@ static long call_profile_kpm_control(const char *__user command_user, void *__us
     if (!command_user || !out_msg || outlen <= 0 || outlen > 4096) return -EINVAL;
     length = compat_strncpy_from_user(command, command_user, sizeof(command));
     if (length <= 0) return -EINVAL;
-    if (length >= sizeof(command) && command[sizeof(command) - 1]) return -E2BIG;
+    if (length >= (long)sizeof(command) && command[sizeof(command) - 1]) return -E2BIG;
     command[sizeof(command) - 1] = '\0';
     if (!profile_command_allowed(command)) return -EPERM;
     return module_control0(module_name, command, out_msg, outlen);
@@ -228,7 +259,9 @@ static long call_profile_kpm_observer(void *__user request)
     if (!request) return -EINVAL;
     return module_control1(module_name, request, 0, 0);
 }
+#endif
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_kpm_unload(const char *__user arg1, void *__user reserved)
 {
     char name[KPM_NAME_LEN];
@@ -287,6 +320,7 @@ static long call_su_task(pid_t pid, struct su_profile *__user uprofile)
     kvfree(profile);
     return rc;
 }
+#endif
 
 static long call_skey_get(char *__user out_key, int out_len)
 {
@@ -312,6 +346,7 @@ static long call_skey_root_enable(int enable)
     return 0;
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_grant_uid(struct su_profile *__user uprofile)
 {
     struct su_profile *profile = memdup_user(uprofile, sizeof(struct su_profile));
@@ -330,6 +365,7 @@ static long call_su_allow_uid_nums()
 {
     return su_allow_uid_nums();
 }
+#endif
 
 #ifdef ANDROID
 extern int android_is_safe_mode;
@@ -349,6 +385,7 @@ static long call_ap_load_package_config()
 }
 #endif
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su_list_allow_uid(uid_t *__user uids, int num)
 {
     return su_allow_uids(1, uids, num);
@@ -407,9 +444,13 @@ static long call_kstorage_remove(int gid, long did)
 {
     return remove_kstorage(gid, did);
 }
+#endif
 
 static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, long arg4)
 {
+#if defined(KP_RESTRICTED_PROFILE_BUILD) && !defined(KP_KSH_RESEARCH_LAB)
+    (void)arg4;
+#endif
 #ifdef KP_RESTRICTED_PROFILE_BUILD
     switch (cmd) {
     case SUPERCALL_HELLO:
@@ -561,14 +602,17 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
 
 int is_trusted_manager_uid(uid_t uid)
 {
-    #ifdef ANDROID
+#ifdef ANDROID
     return is_trusted_manager_uid_android(uid);
-    #endif
+#else
+    (void)uid;
+#endif
     return 0;
 }
 
 static void before(hook_fargs6_t *args, void *udata)
 {
+    (void)udata;
     int uid = current_uid();
     long ver_xx_cmd = (long)syscall_argn(args, 1);
     long cmd = ver_xx_cmd & 0xFFFF;
@@ -583,12 +627,6 @@ static void before(hook_fargs6_t *args, void *udata)
         is_trusted_caller = 1;
         is_authed = 1;
     }
-#ifdef KP_KSH_RESEARCH_LAB
-    else if (cmd == SUPERCALL_KPM_CONTROL) {
-        is_trusted_caller = 1;
-        is_authed = 1;
-    }
-#endif
 #else
     if (has_preset_superkey()) {
         const char *__user key_user = (const char *__user)syscall_argn(args, 0);

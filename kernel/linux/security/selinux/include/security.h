@@ -302,8 +302,14 @@ static inline bool selinux_need_call_compat()
     return kver >= VERSION(4, 17, 0) && kver < VERSION(6, 4, 0);
 }
 
-#define selinux_compat_call_kfunc(func, ...) \
-    ((selinux_compat_kf_##func##_t)kfunc(func))(kvar(selinux_state), ##__VA_ARGS__)
+#define selinux_compat_call_kfunc(func, ...)                                     \
+    ({                                                                           \
+        union {                                                                  \
+            typeof(kfunc(func)) native;                                          \
+            selinux_compat_kf_##func##_t compat;                                 \
+        } selinux_compat_fn = { .native = kfunc(func) };                         \
+        selinux_compat_fn.compat(kvar(selinux_state), ##__VA_ARGS__);            \
+    })
 
 #define selinux_adapt_kfunc_call(func, ...)                        \
     if (kfunc(func)) {                                             \

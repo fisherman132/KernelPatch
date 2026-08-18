@@ -118,6 +118,8 @@ struct cmd_res
 static void handle_cmd_sumgr(char **__user u_filename_p, const char **carr, char *buffer, int buflen,
                              struct cmd_res *cmd_res)
 {
+    (void)u_filename_p;
+    (void)buflen;
     const char *sub_cmd = carr[1];
     if (!sub_cmd) sub_cmd = "";
 
@@ -236,6 +238,7 @@ static void handle_cmd_sumgr(char **__user u_filename_p, const char **carr, char
 static void handle_cmd_key_auth(char **__user u_filename_p, const char *cmd, const char **carr, char *buffer,
                                 int buflen, struct cmd_res *cmd_res)
 {
+    (void)u_filename_p;
     if (!strcmp("key", cmd)) {
         const char *sub_cmd = carr[1];
         if (!sub_cmd) sub_cmd = "";
@@ -502,7 +505,7 @@ echo:
 
 free:
     // free args
-    for (int i = 2; i < sizeof(parr) / sizeof(parr[0]); i++) {
+    for (size_t i = 2; i < sizeof(parr) / sizeof(parr[0]); i++) {
         const char *a = parr[i];
         if (!a) continue;
         kfree(a);

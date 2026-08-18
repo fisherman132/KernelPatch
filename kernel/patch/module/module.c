@@ -96,6 +96,8 @@ static char *next_string(char *string, unsigned long *secsize)
 /* Update size with this section: return offset. */
 static long get_offset(struct module *mod, unsigned int *size, Elf_Shdr *sechdr, unsigned int section)
 {
+    (void)mod;
+    (void)section;
     long ret = ALIGN(*size, sechdr->sh_addralign ?: 1);
     *size = ret + sechdr->sh_size;
     return ret;
@@ -163,7 +165,7 @@ static void layout_sections(struct module *mod, struct load_info *info)
         info->sechdrs[i].sh_entsize = ~0UL;
 
     // todo: tslf alloc all rwx and not page aligned
-    for (int m = 0; m < sizeof(masks) / sizeof(masks[0]); ++m) {
+    for (size_t m = 0; m < sizeof(masks) / sizeof(masks[0]); ++m) {
         for (int i = 0; i < info->hdr->e_shnum; ++i) {
             Elf_Shdr *s = &info->sechdrs[i];
             if ((s->sh_flags & masks[m][0]) != masks[m][0] || (s->sh_flags & masks[m][1]) || s->sh_entsize != ~0UL)
@@ -201,6 +203,7 @@ static bool is_core_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs, unsigned
 /* Change all symbols so that st_value encodes the pointer directly. */
 static int simplify_symbols(struct module *mod, struct load_info *info)
 {
+    (void)mod;
     Elf_Shdr *symsec = &info->sechdrs[info->index.sym];
     Elf_Sym *sym = (void *)symsec->sh_addr;
     unsigned long secbase;

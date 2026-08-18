@@ -58,6 +58,7 @@ KP_EXPORT_SYMBOL(task_ext_size);
 
 static void after_copy_process(hook_fargs8_t *args, void *udata)
 {
+    (void)udata;
     struct task_struct *new = (struct task_struct *)args->ret;
     if (unlikely(!new || IS_ERR(new))) return;
     prepare_task_ext(new, current);
@@ -65,6 +66,7 @@ static void after_copy_process(hook_fargs8_t *args, void *udata)
 
 static void after_cgroup_post_fork(hook_fargs4_t *args, void *udata)
 {
+    (void)udata;
     struct task_struct *new = (struct task_struct *)args->arg0;
     prepare_task_ext(new, current);
 }

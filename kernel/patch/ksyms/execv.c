@@ -45,7 +45,7 @@ static void before_execve(hook_fargs3_t *args, void *udata)
 
         if ((arg0 == val0) && (val1 == arg1) && (val2 == arg2)) {
             struct pt_regs *regs = (struct pt_regs *)i;
-            if (regs->orig_x0 == arg0 && regs->syscallno == nr && regs->regs[8] == nr) {
+            if (regs->orig_x0 == arg0 && regs->syscallno == (s32)nr && regs->regs[8] == nr) {
                 pt_regs_offset = addr - i;
                 break;
             }
@@ -56,6 +56,8 @@ static void before_execve(hook_fargs3_t *args, void *udata)
 
 static void after_execv(hook_fargs5_t *args, void *udata)
 {
+    (void)args;
+    (void)udata;
     unhook_syscalln(__NR_execve, before_execve, after_execv);
     unhook_syscalln(__NR_execveat, before_execve, after_execv);
 }
@@ -67,11 +69,11 @@ int resolve_pt_regs()
 
     rc = hook_syscalln(__NR_execve, 3, before_execve, after_execv, (void *)__NR_execve);
     log_boot("hook __NR_execve rc: %d\n", rc);
-    ret |= rc;
+    if (ret == HOOK_NO_ERR && rc != HOOK_NO_ERR) ret = rc;
 
     rc = hook_syscalln(__NR_execveat, 5, before_execve, after_execv, (void *)__NR_execveat);
     log_boot("hook __NR_execveat rc: %d\n", rc);
-    ret |= rc;
+    if (ret == HOOK_NO_ERR && rc != HOOK_NO_ERR) ret = rc;
 
-    return rc;
+    return ret;
 }

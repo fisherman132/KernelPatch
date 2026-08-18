@@ -90,9 +90,6 @@ static const struct trusted_manager_entry trusted_managers[] = {
 };
 
 static uid_t trusted_manager_uid = TRUSTED_MANAGER_UID_INVALID;
-static int global_pkg_pos = 0;
-
-
 static const char ORIGIN_RC_FILES[][64] = {
     "/system/etc/init/hw/init.rc",
     "/init.rc",
@@ -273,38 +270,6 @@ static int apk_sig_block_matches_trusted_digest(struct file *fp, uint32_t *size4
     return 1;
 }
 
-static int apk_has_v1_signature_file(struct file *fp)
-{
-    static const char manifest[] = "META-INF/MANIFEST.MF";
-    struct zip_entry_header header;
-    loff_t pos = 0;
-
-    while (kernel_read(fp, &header, sizeof(header), &pos) == sizeof(header)) {
-        if (header.signature != 0x04034b50u) {
-            return 0;
-        }
-
-        if (header.file_name_length == sizeof(manifest) - 1) {
-            char file_name[sizeof(manifest)];
-            if (kernel_read(fp, file_name, header.file_name_length, &pos) != header.file_name_length) {
-                return 0;
-            }
-            file_name[header.file_name_length] = '\0';
-            if (strncmp(file_name, manifest, sizeof(manifest) - 1) == 0) {
-                return 1;
-            }
-        } else if (skip_bytes(&pos, header.file_name_length)) {
-            return 0;
-        }
-
-        if (skip_bytes(&pos, (uint64_t)header.extra_field_length + header.compressed_size)) {
-            return 0;
-        }
-    }
-
-    return 0;
-}
-
 static int apk_matches_trusted_signature(const char *path, const char *expected_digest)
 {
     int i;
@@ -416,11 +381,6 @@ static int apk_matches_trusted_signature(const char *path, const char *expected_
                  v2_blocks, v2_valid, v3_present, v31_present);
         goto out;
     }
-
-    // if (apk_has_v1_signature_file(fp)) {
-    //     log_boot("trusted manager apk has v1 signature file, which is not allowed\n");
-    //     goto out;
-    // }
 
     rc = 1;
 
@@ -546,6 +506,9 @@ static bool apk_inner_actor(struct dir_context *dctx,
                             const char *name, int namelen,
                             loff_t offset, u64 ino, unsigned int d_type)
 {
+    (void)offset;
+    (void)ino;
+    (void)d_type;
     struct apk_inner_ctx *ctx =
         container_of(dctx, struct apk_inner_ctx, dctx);
 
@@ -595,6 +558,9 @@ static int apk_inner_actor_int(struct dir_context_int *dctx,
                             const char *name, int namelen,
                             loff_t offset, u64 ino, unsigned int d_type)
 {
+    (void)offset;
+    (void)ino;
+    (void)d_type;
     struct apk_inner_ctx_int *ctx =
         container_of(dctx, struct apk_inner_ctx_int, dctx);
 
@@ -665,6 +631,9 @@ static bool apk_outer_actor(struct dir_context *dctx,
                             const char *name, int namelen,
                             loff_t offset, u64 ino, unsigned int d_type)
 {
+    (void)offset;
+    (void)ino;
+    (void)d_type;
     struct apk_outer_ctx *ctx = container_of(dctx, struct apk_outer_ctx, dctx);
     struct apk_inner_ctx *inner;
     struct file *inner_dir;
@@ -723,6 +692,9 @@ static int apk_outer_actor_int(struct dir_context_int *dctx,
                             const char *name, int namelen,
                             loff_t offset, u64 ino, unsigned int d_type)
 {
+    (void)offset;
+    (void)ino;
+    (void)d_type;
     struct apk_outer_ctx_int *ctx = container_of(dctx, struct apk_outer_ctx_int, dctx);
     struct apk_inner_ctx_int *inner;
     struct file *inner_dir;
@@ -1374,6 +1346,7 @@ static void on_first_app_process()
 static void handle_before_execve(hook_local_t *hook_local, char **__user u_filename_p, char **__user uargv,
                                  char **__user uenvp, void *udata)
 {
+    (void)udata;
     // unhook flag
     hook_local->data7 = 0;
     hook_local->data1 = 0;
@@ -1504,6 +1477,7 @@ static void before_execve(hook_fargs3_t *args, void *udata)
 
 static void after_execve(hook_fargs3_t *args, void *udata)
 {
+    (void)udata;
     handle_after_execve(&args->local, args->ret);
 }
 
@@ -1520,6 +1494,7 @@ static void before_execveat(hook_fargs5_t *args, void *udata)
 
 static void after_execveat(hook_fargs5_t *args, void *udata)
 {
+    (void)udata;
     handle_after_execve(&args->local, args->ret);
 }
 
@@ -1527,6 +1502,7 @@ static void after_execveat(hook_fargs5_t *args, void *udata)
 // SYSCALL_DEFINE4(openat, int, dfd, const char __user *, filename, int, flags, umode_t, mode)
 static void before_openat(hook_fargs4_t *args, void *udata)
 {
+    (void)udata;
     
     // cp len
     args->local.data0 = 0;
@@ -1584,8 +1560,9 @@ static void before_openat(hook_fargs4_t *args, void *udata)
     const char *sk = get_superkey();
     sprintf(added_rc_data, user_rc_data, sk, sk, sk, sk, sk, sk, sk);
 
-    kernel_write(newfp, added_rc_data, strlen(added_rc_data), &off);
-    if (off != strlen(added_rc_data) + ori_len) {
+    size_t added_len = strlen(added_rc_data);
+    kernel_write(newfp, added_rc_data, added_len, &off);
+    if (off != ori_len + (loff_t)added_len) {
         log_boot("write replace rc error: %x\n", off);
         goto free;
     }
@@ -1613,6 +1590,7 @@ out:
 
 static void after_openat(hook_fargs4_t *args, void *udata)
 {
+    (void)udata;
     if (args->local.data0 && args->local.data3 > 0) {
         
         const char *origin_rc = ORIGIN_RC_FILES[args->local.data3 - 1];
@@ -1656,6 +1634,7 @@ static void refresh_packages_list_tmp_rename(struct dentry *tmp_dentry)
 
 static void after_security_path_rename(hook_fargs5_t *args, void *udata)
 {
+    (void)udata;
     if ((long)args->ret >= 0) {
         refresh_packages_list_tmp_rename((struct dentry *)args->arg1);
     }
@@ -1663,6 +1642,7 @@ static void after_security_path_rename(hook_fargs5_t *args, void *udata)
 
 static void after_security_inode_rename(hook_fargs5_t *args, void *udata)
 {
+    (void)udata;
     if ((long)args->ret >= 0) {
         refresh_packages_list_tmp_rename((struct dentry *)args->arg1);
     }
@@ -1705,6 +1685,7 @@ KP_EXPORT_SYMBOL(android_is_safe_mode);
 // void input_handle_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 static void before_input_handle_event(hook_fargs4_t *args, void *udata)
 {
+    (void)udata;
     static unsigned int volumedown_pressed_count = 0;
     unsigned int type = args->arg1;
     unsigned int code = args->arg2;

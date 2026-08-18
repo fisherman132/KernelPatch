@@ -511,7 +511,7 @@ int resolve_current()
     // THREAD_SIZE and end_of_stack and CONFIG_THREAD_INFO_IN_TASK
     // don't worry, we use little stack until here
     int thread_shift_cand[] = { 14, 15, 16 };
-    for (int i = 0; i < sizeof(thread_shift_cand) / sizeof(thread_shift_cand[0]); i++) {
+    for (size_t i = 0; i < sizeof(thread_shift_cand) / sizeof(thread_shift_cand[0]); i++) {
         int tsz = 1 << thread_shift_cand[i];
         uint64_t sp_low = sp & ~(tsz - 1);
         // uint64_t sp_high = sp_low + tsz; // user_stack_pointer

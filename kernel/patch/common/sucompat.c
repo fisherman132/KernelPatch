@@ -73,8 +73,9 @@ int su_add_allow_uid(uid_t uid, uid_t to_uid, const char *scontext)
 {
     if (!scontext) scontext = "";
     struct su_profile profile = {
-        uid,
-        to_uid,
+        .uid = uid,
+        .to_uid = to_uid,
+        .scontext = { 0 },
     };
     memcpy(profile.scontext, scontext, SUPERCALL_SCONTEXT_LEN);
     int rc = write_kstorage(su_kstorage_gid, uid, &profile, 0, sizeof(struct su_profile), false);
@@ -191,6 +192,7 @@ KP_EXPORT_SYMBOL(su_get_path);
 
 static void handle_before_execve(char **__user u_filename_p, char **__user uargv, void *udata)
 {
+    (void)udata;
     uid_t uid = current_uid();
 #ifdef KP_RESTRICTED_PROFILE_BUILD
     if (uid != 0) return;
@@ -322,6 +324,7 @@ __maybe_unused static void before_execveat(hook_fargs5_t *args, void *udata)
 // 		struct statx __user *, buffer)
 __maybe_unused static void su_handler_arg1_ufilename_before(hook_fargs6_t *args, void *udata)
 {
+    (void)udata;
     uid_t uid = current_uid();
 #ifdef KP_RESTRICTED_PROFILE_BUILD
     if (uid != 0) return;
@@ -347,6 +350,7 @@ __maybe_unused static void su_handler_arg1_ufilename_before(hook_fargs6_t *args,
 
 static void after_getname_flags(hook_fargs3_t *args, void *udata)
 {
+    (void)udata;
     struct filename *fn = (struct filename *)args->ret;
     if (IS_ERR_OR_NULL(fn)) return;
 

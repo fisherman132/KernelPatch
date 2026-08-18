@@ -96,9 +96,9 @@ static uint64_t relo_in_tramp(hook_t *hook, uint64_t addr)
     if (!(addr >= tramp_start && addr < tramp_end)) return addr;
     uint32_t addr_inst_index = (addr - tramp_start) / 4;
     uint64_t fix_addr = hook->relo_addr;
-    for (int i = 0; i < addr_inst_index; i++) {
+    for (uint32_t i = 0; i < addr_inst_index; i++) {
         inst_type_t inst = hook->origin_insts[i];
-        for (int j = 0; j < sizeof(relo_len) / sizeof(relo_len[0]); j++) {
+        for (uint32_t j = 0; j < sizeof(relo_len) / sizeof(relo_len[0]); j++) {
             if ((inst & masks[j]) == types[j]) {
                 fix_addr += relo_len[j] * 4;
                 break;
@@ -246,6 +246,7 @@ static __noinline hook_err_t relo_ldr(hook_t *hook, uint64_t inst_addr, uint32_t
 
 static __noinline hook_err_t relo_cb(hook_t *hook, uint64_t inst_addr, uint32_t inst, inst_type_t type)
 {
+    (void)type;
     uint32_t *buf = hook->relo_insts + hook->relo_insts_num;
 
     uint64_t imm19 = bits32(inst, 23, 5);
@@ -264,6 +265,7 @@ static __noinline hook_err_t relo_cb(hook_t *hook, uint64_t inst_addr, uint32_t 
 
 static __noinline hook_err_t relo_tb(hook_t *hook, uint64_t inst_addr, uint32_t inst, inst_type_t type)
 {
+    (void)type;
     uint32_t *buf = hook->relo_insts + hook->relo_insts_num;
 
     uint64_t imm14 = bits32(inst, 18, 5);
@@ -282,6 +284,8 @@ static __noinline hook_err_t relo_tb(hook_t *hook, uint64_t inst_addr, uint32_t 
 
 static __noinline hook_err_t relo_ignore(hook_t *hook, uint64_t inst_addr, uint32_t inst, inst_type_t type)
 {
+    (void)inst_addr;
+    (void)type;
     uint32_t *buf = hook->relo_insts + hook->relo_insts_num;
     buf[0] = inst;
     buf[1] = ARM64_NOP;
@@ -492,7 +496,7 @@ static __noinline hook_err_t relocate_inst(hook_t *hook, uint64_t inst_addr, uin
     inst_type_t it = INST_IGNORE;
     int len = 1;
 
-    for (int j = 0; j < sizeof(relo_len) / sizeof(relo_len[0]); j++) {
+    for (uint32_t j = 0; j < sizeof(relo_len) / sizeof(relo_len[0]); j++) {
         if ((inst & masks[j]) == types[j]) {
             it = types[j];
             len = relo_len[j];
@@ -559,7 +563,7 @@ hook_err_t hook_prepare(hook_t *hook)
     }
 
     // relocate
-    for (int i = 0; i < sizeof(hook->relo_insts) / sizeof(hook->relo_insts[0]); i++) {
+    for (uint32_t i = 0; i < sizeof(hook->relo_insts) / sizeof(hook->relo_insts[0]); i++) {
         hook->relo_insts[i] = ARM64_NOP;
     }
 

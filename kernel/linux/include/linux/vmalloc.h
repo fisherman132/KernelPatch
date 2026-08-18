@@ -177,12 +177,13 @@ static inline void *__vmalloc_node_range(unsigned long size, unsigned long align
     if (likely(kver >= VERSION(4, 0, 0))) {
         kfunc_call(__vmalloc_node_range, size, align, start, end, gfp_mask, prot, vm_flags, node, caller);
     } else {
-        void *(*__vmalloc_node_range_legacy)(unsigned long size, unsigned long align, unsigned long start,
-                                             unsigned long end, gfp_t gfp_mask, pgprot_t prot, int node,
-                                             const void *caller) =
-            (typeof(__vmalloc_node_range_legacy))kfunc(__vmalloc_node_range);
-        if (__vmalloc_node_range_legacy)
-            return __vmalloc_node_range_legacy(size, align, start, end, gfp_mask, prot, node, caller);
+        union {
+            typeof(kfunc(__vmalloc_node_range)) modern_fn;
+            void *(*legacy_fn)(unsigned long size, unsigned long align, unsigned long start, unsigned long end,
+                               gfp_t gfp_mask, pgprot_t prot, int node, const void *caller);
+        } fn = { .modern_fn = kfunc(__vmalloc_node_range) };
+        if (fn.legacy_fn)
+            return fn.legacy_fn(size, align, start, end, gfp_mask, prot, node, caller);
     }
 
     kfunc_not_found();

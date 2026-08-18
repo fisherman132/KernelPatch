@@ -25,11 +25,26 @@
 #define kfunc_lookup_name(func) kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func)
 
 #ifdef INIT_USE_KALLSYMS_LOOKUP_NAME
-#define kvar_match(var, name, addr) kvar_lookup_name(var)
-#define kfunc_match(func, name, addr) kfunc_lookup_name(func)
-#define kfunc_match_cfi(func, name, addr)                                 \
-    kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func ".cfi_jt"); \
-    if (!kf_##func) kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func);
+#define kvar_match(var, name, addr) \
+    do {                            \
+        (void)(name);              \
+        (void)(addr);              \
+        kvar_lookup_name(var);     \
+    } while (0)
+#define kfunc_match(func, name, addr) \
+    do {                              \
+        (void)(name);                 \
+        (void)(addr);                 \
+        kfunc_lookup_name(func);      \
+    } while (0)
+#define kfunc_match_cfi(func, name, addr)                                     \
+    do {                                                                       \
+        (void)(name);                                                          \
+        (void)(addr);                                                          \
+        kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func ".cfi_jt"); \
+        if (!kf_##func)                                                        \
+            kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func);        \
+    } while (0)
 #else
 int _ksym_local_strcmp(const char *s1, const char *s2);
 #define kvar_match(var, name, addr) \

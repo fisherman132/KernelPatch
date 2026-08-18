@@ -81,13 +81,14 @@ static int hotpatch_cb(void *arg)
     int i, ret = 0;
     struct hotpatch_t *pp = arg;
     int index = atomic_inc_return(&pp->index);
-    if (!index || index == num_online_cpus()) {
+    int online_cpus = (int)num_online_cpus();
+    if (!index || index == online_cpus) {
         for (i = 0; ret == 0 && i < pp->cnt; ++i)
             ret = hotpatch_nosync(pp->addrs[i], pp->values[i]);
 
         atomic_inc(&pp->index);
     } else {
-        while (atomic_read(&pp->index) <= num_online_cpus())
+        while (atomic_read(&pp->index) <= online_cpus)
             asm volatile("yield" ::: "memory");
 
         isb();
@@ -123,11 +124,15 @@ KP_EXPORT_SYMBOL(hotpatch);
 
 static void _arch_arm64_text_patching_init(const char *name, unsigned long addr)
 {
+    (void)name;
+    (void)addr;
     kfunc_match(aarch64_insn_patch_text_nosync, name, addr);
 }
 
 static int _hotpatch_symbol_init(void *data, const char *name, struct module *m, unsigned long addr)
 {
+    (void)data;
+    (void)m;
     _arch_arm64_text_patching_init(name, addr);
     return 0;
 }

@@ -25,12 +25,13 @@ map_data_t map_data __section(.map.data) __aligned(MAP_ALIGN) = {
 
 /*
  * Everything reached through a direct branch while the temporary map code is
- * executing has to live in .setup.map as well.  This code is copied from its
- * link address into a cold kernel-text slot before paging_init(); a BL to the
- * normal lib_memcpy in .kp.text would therefore keep the old relative
- * displacement and jump into unrelated kernel text after the copy.
+ * executing has to live in .setup.map as well.  The link script collects this
+ * object's ordinary .text into that region after the dedicated .map.text
+ * anchor.  Keeping this helper out of .map.text is intentional: get_data()
+ * recovers map_data from the first instruction in .map.text, so no helper may
+ * be inserted between the data block and get_myva().
  */
-static void __section(.map.text) __noinline map_memcpy(void *dst, const void *src, uint64_t size)
+static void __noinline map_memcpy(void *dst, const void *src, uint64_t size)
 {
     uint8_t *d = dst;
     const uint8_t *s = src;
@@ -207,7 +208,7 @@ void __noinline _paging_init()
 #ifdef MAP_DEBUG
     printk_f printk = (printk_f)(data->printk_relo);
 #define map_debug(idx, val) printk(data->str_fmt_px, idx, val)
-    for (int i = 0; i < sizeof(map_data_t); i += 8) {
+    for (uint32_t i = 0; i < sizeof(map_data_t); i += 8) {
         map_debug(i, *(uint64_t *)((uint64_t)data + i));
     }
 #else
@@ -262,10 +263,10 @@ void __noinline _paging_init()
     for (uint64_t i = start_va; i < start_va + all_size; i += 8) {
         *(uint64_t *)i = 0;
     }
-    for (uint64_t i = 0; i < data->start_img_size; i += 8) {
+    for (uint64_t i = 0; i < (uint64_t)data->start_img_size; i += 8) {
         *(uint64_t *)(start_va + i) = *(uint64_t *)(old_start_va + i);
     }
-    for (uint64_t i = 0; i < data->extra_size; i += 8) {
+    for (uint64_t i = 0; i < (uint64_t)data->extra_size; i += 8) {
         *(uint64_t *)(start_va + data->start_size + i) = *(uint64_t *)(old_start_va + data->start_img_size + i);
     }
 

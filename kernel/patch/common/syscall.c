@@ -347,12 +347,12 @@ KP_EXPORT_SYMBOL(unhook_compat_syscalln);
 
 void syscall_init()
 {
-    for (int i = 0; i < sizeof(syscall_name_table) / sizeof(syscall_name_table[0]); i++) {
+    for (size_t i = 0; i < sizeof(syscall_name_table) / sizeof(syscall_name_table[0]); i++) {
         uintptr_t *addr = (uintptr_t *)&syscall_name_table[i].name;
         *addr = link2runtime(*addr);
     }
 
-    for (int i = 0; i < sizeof(compat_syscall_name_table) / sizeof(compat_syscall_name_table[0]); i++) {
+    for (size_t i = 0; i < sizeof(compat_syscall_name_table) / sizeof(compat_syscall_name_table[0]); i++) {
         uintptr_t *addr = (uintptr_t *)&compat_syscall_name_table[i].name;
         *addr = link2runtime(*addr);
     }

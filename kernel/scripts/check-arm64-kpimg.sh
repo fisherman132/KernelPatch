@@ -8,14 +8,15 @@
 set -eu
 export LC_ALL=C
 
-if [ "$#" -ne 3 ]; then
-    echo "usage: $0 KPIMG_ELF TARGET_NM TARGET_OBJDUMP" >&2
+if [ "$#" -ne 4 ]; then
+    echo "usage: $0 KPIMG_ELF TARGET_NM TARGET_OBJDUMP TARGET_READELF" >&2
     exit 2
 fi
 
 elf=$1
 nm=$2
 objdump=$3
+readelf=$4
 
 if [ ! -r "$elf" ]; then
     echo "arm64 check: unreadable ELF: $elf" >&2
@@ -27,6 +28,10 @@ if ! command -v "$nm" >/dev/null 2>&1; then
 fi
 if ! command -v "$objdump" >/dev/null 2>&1; then
     echo "arm64 check: target objdump not found: $objdump" >&2
+    exit 2
+fi
+if ! command -v "$readelf" >/dev/null 2>&1; then
+    echo "arm64 check: target readelf not found: $readelf" >&2
     exit 2
 fi
 
@@ -55,7 +60,7 @@ case "$map_start:$map_end" in
 esac
 
 if ! bl_report=$(
-    "$objdump" -d --section=.setup.map --no-show-raw-insn "$elf" |
+    "$objdump" -d --section=.setup.map.text --no-show-raw-insn "$elf" |
         awk -v start_hex="$map_start" -v end_hex="$map_end" '
             function hex_value(s,    i, digit, value) {
                 sub(/^0[xX]/, "", s)
@@ -97,6 +102,53 @@ if ! bl_report=$(
     exit 1
 fi
 printf '%s\n' "$bl_report"
+
+if ! map_layout_report=$(
+    "$nm" -n -S --defined-only "$elf" |
+        awk '
+            function hex_value(s,    i, digit, value) {
+                sub(/^0[xX]/, "", s)
+                s = tolower(s)
+                value = 0
+                for (i = 1; i <= length(s); i++) {
+                    digit = index("0123456789abcdef", substr(s, i, 1)) - 1
+                    if (digit < 0) return -1
+                    value = value * 16 + digit
+                }
+                return value
+            }
+            $NF == "_map_start" { start = hex_value($1); starts++ }
+            $NF == "map_data" { data = hex_value($1); size = hex_value($2); data_count++ }
+            $NF == "get_myva" { anchor = hex_value($1); anchors++ }
+            END {
+                if (starts != 1 || data_count != 1 || anchors != 1 ||
+                    start < 0 || data < 0 || size <= 0 || anchor < 0) {
+                    print "arm64 check: malformed map anchor symbols" > "/dev/stderr"
+                    exit 2
+                }
+                if (data != start || anchor != data + size) {
+                    printf "arm64 check: map_data/get_myva layout mismatch: start=0x%x data=0x%x size=0x%x anchor=0x%x\n",
+                           start, data, size, anchor > "/dev/stderr"
+                    exit 1
+                }
+                printf "[PASS] map anchor layout: map_data size 0x%x immediately precedes get_myva\n", size
+            }
+        '
+); then
+    exit 1
+fi
+printf '%s\n' "$map_layout_report"
+
+program_headers=$("$readelf" -W -l "$elf") || {
+    echo "arm64 check: failed to read ELF program headers" >&2
+    exit 1
+}
+if printf '%s\n' "$program_headers" |
+    grep -Eq '^[[:space:]]*LOAD.*[[:space:]]RWE[[:space:]]'; then
+    echo "arm64 check: writable/executable LOAD segment detected" >&2
+    exit 1
+fi
+printf '%s\n' "[PASS] flat-image ELF ranges have no directly RWX LOAD descriptor"
 
 # The two allowed x18 references are the assembly save/restore surrounding the
 # early setup path.  Any additional reference means compiler-generated code or

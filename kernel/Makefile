@@ -20,12 +20,13 @@ AS = $(TARGET_COMPILE)as
 OBJCOPY = $(TARGET_COMPILE)objcopy
 NM = $(TARGET_COMPILE)nm
 OBJDUMP = $(TARGET_COMPILE)objdump
+READELF = $(TARGET_COMPILE)readelf
 
 X86_CC ?= gcc
 X86_LD ?= ld
 X86_OBJCOPY ?= objcopy
 
-CFLAGS += -Wall -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only
+CFLAGS += -Wall -Wextra -Werror -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only
 CFLAGS += -g
 
 ARM64_CHECK := scripts/check-arm64-kpimg.sh
@@ -116,11 +117,11 @@ ${TARGET}: ${TARGET}.elf
 
 ${TARGET}.elf: ${OBJS} ${ARM64_CHECK}
 	${LD} -nostdlib -static -no-pie -Tkpimg.lds -o $@ ${OBJS}
-	${ARM64_CHECK} $@ ${NM} ${OBJDUMP}
+	${ARM64_CHECK} $@ ${NM} ${OBJDUMP} ${READELF}
 
 .PHONY: check-arm64
 check-arm64: ${TARGET}.elf
-	${ARM64_CHECK} $< ${NM} ${OBJDUMP}
+	${ARM64_CHECK} $< ${NM} ${OBJDUMP} ${READELF}
 
 ${X86_TARGET}: ${X86_TARGET}.elf
 	${X86_OBJCOPY} -O binary -S $^ $@
