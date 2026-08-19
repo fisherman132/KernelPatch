@@ -466,6 +466,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
     case SUPERCALL_PROFILE_KPM_OBSERVER:
         return call_profile_kpm_observer((void *__user)arg1);
+    case SUPERCALL_PROFILE_MANAGER_UID:
+        return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
 #ifdef KP_KSH_RESEARCH_LAB
     case SUPERCALL_KPM_CONTROL:
         return call_ksh_research_control(
@@ -543,6 +545,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
     case SUPERCALL_PROFILE_KPM_OBSERVER:
         return call_profile_kpm_observer((void *__user)arg1);
+    case SUPERCALL_PROFILE_MANAGER_UID:
+        return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
     default:
         break;
     }
