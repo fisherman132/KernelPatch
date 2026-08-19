@@ -66,9 +66,9 @@ enum dma_data_direction
 /* get current exception level (EL1-EL3) */
 static inline uint32_t current_el(void)
 {
-    uint32_t el;
+    uint64_t el;
     asm volatile("mrs %0, CurrentEL" : "=r"(el));
-    return el >> 2;
+    return (uint32_t)(el >> 2);
 }
 
 /* write translation table base register 0 (TTBR0_ELx) */

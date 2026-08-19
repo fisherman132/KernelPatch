@@ -59,6 +59,90 @@ case "$map_start:$map_end" in
         ;;
 esac
 
+link_start=$(
+    "$nm" -n --defined-only "$elf" |
+        awk '$NF == "_link_base" { if (++count == 1) print $1 }
+             END { if (count != 1) exit 1 }'
+) || {
+    echo "arm64 check: expected exactly one _link_base" >&2
+    exit 1
+}
+link_end=$(
+    "$nm" -n --defined-only "$elf" |
+        awk '$NF == "_link_end" { if (++count == 1) print $1 }
+             END { if (count != 1) exit 1 }'
+) || {
+    echo "arm64 check: expected exactly one _link_end" >&2
+    exit 1
+}
+
+case "$link_start:$link_end" in
+    *[!0-9A-Fa-f:]* | :* | *:)
+        echo "arm64 check: malformed link bounds: $link_start..$link_end" >&2
+        exit 1
+        ;;
+esac
+
+# kpimg is copied away from its low link-time VMA without applying dynamic
+# relocations.  An eight-byte object slot in .kp.text that contains an address
+# inside the linked image is therefore an unsafe absolute self-pointer.  This
+# catches C pointer tables even if compiler-generated local symbol names change.
+if ! absolute_pointer_report=$(
+    "$objdump" -s --section=.kp.text "$elf" |
+        awk -v start_hex="$link_start" -v end_hex="$link_end" '
+            function hex_value(s,    i, digit, value) {
+                sub(/^0[xX]/, "", s)
+                s = tolower(s)
+                value = 0
+                for (i = 1; i <= length(s); i++) {
+                    digit = index("0123456789abcdef", substr(s, i, 1)) - 1
+                    if (digit < 0) return -1
+                    value = value * 16 + digit
+                }
+                return value
+            }
+            function little_endian_word(s,    b0, b1, b2, b3) {
+                if (length(s) != 8) return -1
+                b0 = hex_value(substr(s, 1, 2))
+                b1 = hex_value(substr(s, 3, 2))
+                b2 = hex_value(substr(s, 5, 2))
+                b3 = hex_value(substr(s, 7, 2))
+                return b0 + 256 * b1 + 65536 * b2 + 16777216 * b3
+            }
+            BEGIN {
+                start = hex_value(start_hex)
+                end = hex_value(end_hex)
+                if (start < 0 || end <= start || end > 4294967295) {
+                    print "arm64 check: invalid flat-image link bounds" > "/dev/stderr"
+                    exit 2
+                }
+            }
+            /^[[:space:]]*[[:xdigit:]]+[[:space:]]/ {
+                line_address = hex_value($1)
+                for (field = 2; field + 1 <= NF; field += 2) {
+                    if (length($field) != 8 || length($(field + 1)) != 8 ||
+                        $field ~ /[^[:xdigit:]]/ ||
+                        $(field + 1) ~ /[^[:xdigit:]]/)
+                        break
+                    low = little_endian_word($field)
+                    high = little_endian_word($(field + 1))
+                    if (high == 0 && low >= start && low < end) {
+                        printf "arm64 check: .kp.text absolute in-image pointer at 0x%x -> 0x%x\n",
+                               line_address + (field - 2) * 4, low > "/dev/stderr"
+                        bad = 1
+                    }
+                }
+            }
+            END {
+                if (bad) exit 1
+                print "[PASS] .kp.text contains no absolute in-image pointer slots"
+            }
+        '
+); then
+    exit 1
+fi
+printf '%s\n' "$absolute_pointer_report"
+
 if ! bl_report=$(
     "$objdump" -d --section=.setup.map.text --no-show-raw-insn "$elf" |
         awk -v start_hex="$map_start" -v end_hex="$map_end" '

@@ -29,6 +29,14 @@ struct load_info
     } index;
 };
 
+enum module_state
+{
+    MODULE_LOADING = 0,
+    MODULE_LIVE,
+    MODULE_EXITING,
+    MODULE_INIT_FAILED,
+};
+
 struct module
 {
     struct
@@ -36,7 +44,14 @@ struct module
         const char *base, *name, *version, *license, *author, *description;
     } info;
 
-    char *args, *ctl_args;
+    char *args;
+    char *ctl_args;
+
+    enum module_state state;
+    atomic_t active_calls;
+    atomic_t ctl_active;
+    long init_rc;
+    long exit_rc;
 
     mod_initcall_t *init;
     mod_ctl0call_t *ctl0;

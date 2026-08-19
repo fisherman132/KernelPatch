@@ -75,11 +75,6 @@ static void set_kpm_load_result(void __user *reserved, long code, const char *me
     compat_copy_to_user(reserved, &result, sizeof(result));
 }
 
-static inline bool strstarts(const char *str, const char *prefix)
-{
-    return strncmp(str, prefix, strlen(prefix)) == 0;
-}
-
 static char *next_string(char *string, unsigned long *secsize)
 {
     while (string[0]) {
@@ -221,7 +216,7 @@ static int simplify_symbols(struct module *mod, struct load_info *info)
             break;
         case SHN_ABS:
             break;
-        case SHN_UNDEF:
+        case SHN_UNDEF: {
             unsigned long addr = symbol_lookup_name(name);
             // kernel symbol cause overflow in relocation
             // if (!addr) addr = kallsyms_lookup_name(name);
@@ -234,6 +229,7 @@ static int simplify_symbols(struct module *mod, struct load_info *info)
             }
             sym[i].st_value = addr;
             break;
+        }
         default:
             secbase = info->sechdrs[sym[i].st_shndx].sh_addr;
             sym[i].st_value += secbase;
@@ -452,29 +448,111 @@ static int elf_header_check(struct load_info *info)
 struct module modules = { 0 };
 static spinlock_t module_lock;
 
+static struct module *find_module_locked(const char *name)
+{
+    struct module *pos;
+
+    if (!name) return 0;
+    list_for_each_entry(pos, &modules.list, list)
+    {
+        if (!strcmp(name, pos->info.name)) return pos;
+    }
+    return 0;
+}
+
+static enum module_state module_state_load(const struct module *mod)
+{
+    return mod ? (enum module_state)__atomic_load_n(&mod->state, __ATOMIC_SEQ_CST) : MODULE_EXITING;
+}
+
+static const char *safe_text(const char *text)
+{
+    return text ? text : "";
+}
+
+static void module_state_store(struct module *mod, enum module_state state)
+{
+    if (mod) __atomic_store_n(&mod->state, state, __ATOMIC_SEQ_CST);
+}
+
+static bool module_try_get_live(struct module *mod)
+{
+    if (!mod || module_state_load(mod) != MODULE_LIVE) return false;
+    __atomic_add_fetch(&mod->active_calls.counter, 1, __ATOMIC_SEQ_CST);
+    if (module_state_load(mod) != MODULE_LIVE) {
+        __atomic_sub_fetch(&mod->active_calls.counter, 1, __ATOMIC_SEQ_CST);
+        return false;
+    }
+    return true;
+}
+
+static void module_put_live(struct module *mod)
+{
+    if (mod) __atomic_sub_fetch(&mod->active_calls.counter, 1, __ATOMIC_SEQ_CST);
+}
+
+static struct module *module_get_live(const char *name, long *error)
+{
+    struct module *mod;
+
+    if (error) *error = -ENOENT;
+    rcu_read_lock();
+    mod = find_module(name);
+    if (mod && !module_try_get_live(mod)) {
+        mod = 0;
+        if (error) *error = -EBUSY;
+    } else if (mod && error) {
+        *error = 0;
+    }
+    rcu_read_unlock();
+    return mod;
+}
+
+static void free_module(struct module *mod)
+{
+    if (!mod) return;
+    if (mod->args) kvfree(mod->args);
+    if (mod->ctl_args) kvfree(mod->ctl_args);
+    if (mod->start) kp_free_exec(mod->start);
+    kvfree(mod);
+}
+
 long load_module(const void *data, int len, const char *args, const char *event, void *__user reserved)
 {
     struct load_info load_info = { .len = len, .hdr = data };
     struct load_info *info = &load_info;
+    struct module *mod = 0;
     long rc = 0;
+
+    if (args && strlen(args) >= KPM_ARGS_LEN) {
+        rc = -E2BIG;
+        set_load_error(info, "module args too long");
+        goto out;
+    }
 
     if ((rc = elf_header_check(info))) goto out;
     if ((rc = setup_load_info(info))) goto out;
 
-    if (find_module(info->info.name)) {
+    spin_lock(&module_lock);
+    bool exists = find_module_locked(info->info.name) != 0;
+    spin_unlock(&module_lock);
+    if (exists) {
         logkfd("%s exist\n", info->info.name);
         set_load_error(info, "module already exists");
         rc = -EEXIST;
         goto out;
     }
 
-    struct module *mod = (struct module *)vmalloc(sizeof(struct module));
+    mod = (struct module *)vmalloc(sizeof(struct module));
     if (!mod) {
         set_load_error(info, "allocate module state failed");
         rc = -ENOMEM;
         goto out;
     }
     memset(mod, 0, sizeof(struct module));
+    module_state_store(mod, MODULE_LOADING);
+    __atomic_store_n(&mod->active_calls.counter, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&mod->ctl_active.counter, 0, __ATOMIC_SEQ_CST);
 
     if (args) {
         mod->args = vmalloc(strlen(args) + 1);
@@ -501,55 +579,99 @@ long load_module(const void *data, int len, const char *args, const char *event,
 
     flush_icache_all();
 
+    spin_lock(&module_lock);
+    if (find_module_locked(mod->info.name)) {
+        spin_unlock(&module_lock);
+        set_load_error(info, "module already exists");
+        rc = -EEXIST;
+        goto free;
+    }
+    list_add_tail_rcu(&mod->list, &modules.list);
+    spin_unlock(&module_lock);
+
     rc = (*mod->init)(mod->args, event, reserved);
+    mod->init_rc = rc;
 
     if (!rc) {
-        logkfi("[%s] succeed with [%s] \n", mod->info.name, args);
-        list_add_tail(&mod->list, &modules.list);
+        module_state_store(mod, MODULE_LIVE);
+        logkfi("[%s] succeed with [%s] \n", mod->info.name, safe_text(args));
         goto out;
     } else {
         set_load_error(info, "module init failed");
-        logkfi("[%s] failed with [%s] error: %d, try exit ...\n", mod->info.name, args, rc);
-        (*mod->exit)(reserved);
+        logkfi("[%s] failed with [%s] error: %ld, try exit ...\n", mod->info.name, safe_text(args), rc);
+        if (!kfunc(synchronize_rcu)) {
+            mod->exit_rc = -ENOSYS;
+            module_state_store(mod, MODULE_INIT_FAILED);
+            logkfe("[%s] cleanup unavailable: %ld; retained\n", mod->info.name, mod->exit_rc);
+            goto out;
+        }
+        mod->exit_rc = (*mod->exit)(reserved);
+        if (mod->exit_rc) {
+            module_state_store(mod, MODULE_INIT_FAILED);
+            logkfe("[%s] cleanup vetoed: %ld; retained\n", mod->info.name, mod->exit_rc);
+            goto out;
+        }
+        module_state_store(mod, MODULE_EXITING);
+        spin_lock(&module_lock);
+        list_del_rcu(&mod->list);
+        spin_unlock(&module_lock);
+        synchronize_rcu();
     }
 
 free:
-    if (mod->args) kvfree(mod->args);
-    kp_free_exec(mod->start);
+    if (mod && mod->args) kvfree(mod->args);
+    if (mod && mod->start) kp_free_exec(mod->start);
 free1:
-    kvfree(mod);
+    if (mod) kvfree(mod);
 out:
     set_kpm_load_result(reserved, rc, rc ? load_error(info, "load module failed") : "module loaded");
     return rc;
 }
 
-// todo: lock
 long unload_module(const char *name, void *__user reserved)
 {
+    enum module_state previous_state;
+    struct module *mod;
+    long rc;
+
     if (!name) return -EINVAL;
     logkfe("name: %s\n", name);
 
-    rcu_read_lock();
-    long rc = 0;
-
-    struct module *mod = find_module(name);
+    if (!kfunc(synchronize_rcu)) return -ENOSYS;
+    spin_lock(&module_lock);
+    mod = find_module_locked(name);
     if (!mod) {
-        rc = -ENOENT;
-        goto out;
+        spin_unlock(&module_lock);
+        return -ENOENT;
     }
-    list_del(&mod->list);
+    previous_state = module_state_load(mod);
+    if (previous_state != MODULE_LIVE && previous_state != MODULE_INIT_FAILED) {
+        spin_unlock(&module_lock);
+        return -EBUSY;
+    }
+    module_state_store(mod, MODULE_EXITING);
+    if (__atomic_load_n(&mod->active_calls.counter, __ATOMIC_SEQ_CST) != 0) {
+        module_state_store(mod, previous_state);
+        spin_unlock(&module_lock);
+        return -EBUSY;
+    }
+    spin_unlock(&module_lock);
+
     rc = (*mod->exit)(reserved);
+    mod->exit_rc = rc;
+    if (rc) {
+        module_state_store(mod, previous_state);
+        logkfi("name: %s, unload vetoed: %ld\n", name, rc);
+        return rc;
+    }
 
-    if (mod->args) kvfree(mod->args);
-    if (mod->ctl_args) kvfree(mod->ctl_args);
+    spin_lock(&module_lock);
+    list_del_rcu(&mod->list);
+    spin_unlock(&module_lock);
+    synchronize_rcu();
+    free_module(mod);
 
-    kp_free_exec(mod->start);
-    kvfree(mod);
-
-    logkfi("name: %s, rc: %d\n", name, rc);
-
-out:
-    rcu_read_unlock();
+    logkfi("name: %s, rc: %ld\n", name, rc);
     return rc;
 }
 
@@ -605,68 +727,72 @@ out:
 
 long module_control0(const char *name, const char *ctl_args, char *__user out_msg, int outlen)
 {
+    struct module *mod;
+    char *new_args;
+    char *old_args;
+    long rc;
+    int expected;
+
     if (!name || !ctl_args) return -EINVAL;
     int args_len = strlen(ctl_args);
     if (args_len <= 0) return -EINVAL;
 
     logkfi("name %s, args: %s\n", name, ctl_args);
 
-    long rc = 0;
-    rcu_read_lock();
-
-    struct module *mod = find_module(name);
-    if (!mod) {
-        rc = -ENOENT;
-        goto out;
-    }
+    mod = module_get_live(name, &rc);
+    if (!mod) return rc;
 
     if (!mod->ctl0 || !*mod->ctl0) {
         logkfe("no ctl0\n");
-        rc = -ENOSYS;
-        goto out;
+        module_put_live(mod);
+        return -ENOSYS;
     }
 
-    if (mod->ctl_args) kvfree(mod->ctl_args);
-
-    mod->ctl_args = vmalloc(args_len + 1);
-    if (!mod->ctl_args) {
-        rc = -ENOMEM;
-        goto out;
+    expected = 0;
+    if (!__atomic_compare_exchange_n(&mod->ctl_active.counter, &expected, 1, false, __ATOMIC_SEQ_CST,
+                                     __ATOMIC_SEQ_CST)) {
+        module_put_live(mod);
+        return -EBUSY;
     }
 
-    strcpy(mod->ctl_args, ctl_args);
+    new_args = vmalloc(args_len + 1);
+    if (!new_args) {
+        __atomic_store_n(&mod->ctl_active.counter, 0, __ATOMIC_SEQ_CST);
+        module_put_live(mod);
+        return -ENOMEM;
+    }
 
+    strcpy(new_args, ctl_args);
+    old_args = mod->ctl_args;
+    mod->ctl_args = new_args;
+    if (old_args) kvfree(old_args);
     rc = (*mod->ctl0)(mod->ctl_args, out_msg, outlen);
+    __atomic_store_n(&mod->ctl_active.counter, 0, __ATOMIC_SEQ_CST);
+    module_put_live(mod);
 
-    logkfi("name: %s, rc: %d\n", name, rc);
-out:
-    rcu_read_unlock();
+    logkfi("name: %s, rc: %ld\n", name, rc);
     return rc;
 }
 
 long module_control1(const char *name, void *a1, void *a2, void *a3)
 {
-    logkfi("name %s, a1: %llx, a2: %llx, a3: %llx\n", name, a1, a2, a3);
-    long rc = 0;
-    rcu_read_lock();
+    long rc;
 
-    struct module *mod = find_module(name);
-    if (!mod) {
-        rc = -ENOENT;
-        goto out;
-    }
+    if (!name) return -EINVAL;
+    logkfi("name %s, a1: %llx, a2: %llx, a3: %llx\n", name, a1, a2, a3);
+    struct module *mod = module_get_live(name, &rc);
+    if (!mod) return rc;
 
     if (!mod->ctl1 || !*mod->ctl1) {
         logkfe("no ctl1\n");
-        rc = -ENOSYS;
-        goto out;
+        module_put_live(mod);
+        return -ENOSYS;
     }
 
     rc = (*mod->ctl1)(a1, a2, a3);
+    module_put_live(mod);
 
-    logkfi("name: %s, rc: %d\n", name, rc);
-out:
-    rcu_read_unlock();
+    logkfi("name: %s, rc: %ld\n", name, rc);
     return rc;
 }
 
@@ -676,20 +802,32 @@ long notify_modules_event(const char *event, const char *args, void *__user rese
 
     long result = 0;
     int count = 0;
-    rcu_read_lock();
+    struct module *cursor = 0;
 
-    struct module *pos;
-    list_for_each_entry(pos, &modules.list, list)
-    {
-        if (!pos->event || !*pos->event) continue;
+    for (;;) {
+        struct list_head *node;
+        struct module *selected = 0;
 
-        long rc = (*pos->event)(event, args, reserved);
-        logkfi("event: %s, module: %s, rc: %ld\n", event, pos->info.name, rc);
+        rcu_read_lock();
+        node = cursor ? cursor->list.next : modules.list.next;
+        while (node != &modules.list) {
+            struct module *candidate = list_entry(node, struct module, list);
+
+            node = node->next;
+            if (!candidate->event || !*candidate->event || !module_try_get_live(candidate)) continue;
+            selected = candidate;
+            break;
+        }
+        rcu_read_unlock();
+        if (cursor) module_put_live(cursor);
+        cursor = selected;
+        if (!cursor) break;
+
+        long rc = (*cursor->event)(event, args, reserved);
+        logkfi("event: %s, module: %s, rc: %ld\n", event, cursor->info.name, rc);
         if (rc < 0 && !result) result = rc;
         count++;
     }
-
-    rcu_read_unlock();
     return result ?: count;
 }
 KP_EXPORT_SYMBOL(notify_modules_event);
@@ -697,7 +835,8 @@ KP_EXPORT_SYMBOL(notify_modules_event);
 struct module *find_module(const char *name)
 {
     struct module *pos;
-    list_for_each_entry(pos, &modules.list, list)
+    if (!name) return 0;
+    list_for_each_entry_rcu(pos, &modules.list, list)
     {
         if (!strcmp(name, pos->info.name)) {
             return pos;
@@ -712,7 +851,7 @@ int get_module_nums()
 
     struct module *pos;
     int n = 0;
-    list_for_each_entry(pos, &modules.list, list)
+    list_for_each_entry_rcu(pos, &modules.list, list)
     {
         n++;
     }
@@ -731,9 +870,16 @@ int list_modules(char *out_names, int size)
 
     struct module *pos;
     int off = 0;
-    list_for_each_entry(pos, &modules.list, list)
+    list_for_each_entry_rcu(pos, &modules.list, list)
     {
-        off += snprintf(out_names + off, size - 1 - off, "%s\n", pos->info.name);
+        if (off >= size - 1) break;
+        int written = snprintf(out_names + off, size - off, "%s\n", pos->info.name);
+        if (written < 0) break;
+        if (written >= size - off) {
+            off = size - 1;
+            break;
+        }
+        off += written;
     }
     if (off > 0) out_names[off - 1] = '\0';
 
@@ -743,23 +889,41 @@ int list_modules(char *out_names, int size)
 
 int get_module_info(const char *name, char *out_info, int size)
 {
-    if (size <= 0) return 0;
+    const int maximum_info_size = KPM_NAME_LEN + KPM_VERSION_LEN + KPM_LICENSE_LEN + KPM_AUTHOR_LEN +
+                                  KPM_DESCRIPTION_LEN + KPM_ARGS_LEN + 160;
+
+    if (!name || !out_info || size <= 0) return -EINVAL;
+    if (size < maximum_info_size) return -ENOBUFS;
     rcu_read_lock();
 
     struct module *mod = find_module(name);
-    if (!mod) return -ENOENT;
+    if (!mod) {
+        rcu_read_unlock();
+        return -ENOENT;
+    }
 
-    int sz = snprintf(out_info, size - 1,
+    int sz = snprintf(out_info, size,
                       "name=%s\n"
                       "version=%s\n"
                       "license=%s\n"
                       "author=%s\n"
                       "description=%s\n"
-                      "args=%s\n",
-                      mod->info.name, mod->info.version, mod->info.license, mod->info.author, mod->info.description,
-                      mod->args);
+                      "args=%s\n"
+                      "state=%u\n"
+                      "init_rc=%ld\n"
+                      "exit_rc=%ld\n",
+                      safe_text(mod->info.name), safe_text(mod->info.version), safe_text(mod->info.license),
+                      safe_text(mod->info.author), safe_text(mod->info.description),
+                      safe_text(mod->args), (unsigned int)module_state_load(mod), mod->init_rc, mod->exit_rc);
 
-    if (sz > 0) out_info[sz - 1] = '\0';
+    if (sz < 0) {
+        rcu_read_unlock();
+        return sz;
+    }
+    if (sz >= size) {
+        sz = size - 1;
+        out_info[sz] = '\0';
+    }
     logkfd("%s", out_info);
 
     rcu_read_unlock();

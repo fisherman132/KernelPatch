@@ -6,6 +6,7 @@
 #include <linux/lockdep.h>
 #include <linux/bottom_half.h>
 #include <asm-generic/rwonce.h>
+#include <uapi/asm-generic/errno.h>
 
 //  todo: macro for compile
 #define RCU_LOCKDEP_WARN(c, s)
@@ -73,11 +74,13 @@ static inline void rcu_barrier_tasks_rude(void)
 }
 static inline void synchronize_rcu(void)
 {
-    kfunc_call(rcu_barrier_tasks_rude)
+    kfunc_call_void(synchronize_rcu);
 }
 static inline unsigned long get_completed_synchronize_rcu(void)
 {
     kfunc_call(get_completed_synchronize_rcu)
+    kfunc_not_found();
+    return 0;
 }
 static inline void get_completed_synchronize_rcu_full(struct rcu_gp_oldstate *rgosp)
 {
@@ -136,18 +139,26 @@ static inline void rcu_irq_work_resched(void)
 static inline int rcu_read_lock_held(void)
 {
     kfunc_call(rcu_read_lock_held);
+    kfunc_not_found();
+    return 0;
 }
 static inline int rcu_read_lock_bh_held(void)
 {
     kfunc_call(rcu_read_lock_bh_held);
+    kfunc_not_found();
+    return 0;
 }
 static inline int rcu_read_lock_sched_held(void)
 {
     kfunc_call(rcu_read_lock_sched_held);
+    kfunc_not_found();
+    return 0;
 }
 static inline int rcu_read_lock_any_held(void)
 {
     kfunc_call(rcu_read_lock_any_held);
+    kfunc_not_found();
+    return 0;
 }
 
 static inline void rcu_init_nohz(void)
@@ -157,10 +168,14 @@ static inline void rcu_init_nohz(void)
 static inline int rcu_nocb_cpu_offload(int cpu)
 {
     kfunc_call(rcu_nocb_cpu_offload, cpu);
+    kfunc_not_found();
+    return -ENOSYS;
 }
 static inline int rcu_nocb_cpu_deoffload(int cpu)
 {
     kfunc_call(rcu_nocb_cpu_deoffload, cpu);
+    kfunc_not_found();
+    return -ENOSYS;
 }
 static inline void rcu_nocb_flush_deferred_wakeup(void)
 {

@@ -194,13 +194,6 @@ static char boot_log[BOOT_LOG_SIZE] = { 0 };
 static int boot_log_offset = 0;
 static bool boot_log_full = false;
 
-static inline bool hw_dirty()
-{
-    uint64_t tcr_el1;
-    asm volatile("mrs %0, tcr_el1" : "=r"(tcr_el1));
-    return tcr_el1 & 0x10000000000;
-}
-
 const char *get_boot_log()
 {
     return boot_log;

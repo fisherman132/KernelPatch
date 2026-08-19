@@ -194,7 +194,7 @@ static int avc_denied_replace(struct selinux_state *_state, void *_ssid, void *_
     int rc = avc_denied_backup(_state, _ssid, _tsid, _tclass, _requested, _driver, _xperm, _flags, _avd);
     return rc;
 
-allow:
+allow:;
     struct av_decision *avd = (struct av_decision *)_avd;
     if ((uint64_t)_state <= 0xffffffffL) {
         avd = (struct av_decision *)_flags;

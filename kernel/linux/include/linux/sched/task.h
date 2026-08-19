@@ -98,12 +98,14 @@ static inline void __noreturn do_task_dead(void)
 {
     kfunc_call_void(do_task_dead);
     kfunc_not_found();
+    __builtin_trap();
 }
 
 static inline void __noreturn make_task_dead(int signr)
 {
     kfunc_call_void(make_task_dead, signr);
     kfunc_not_found();
+    __builtin_trap();
 }
 
 static inline void proc_caches_init(void)
@@ -146,6 +148,7 @@ static inline __noreturn void do_group_exit(int exit_code)
 {
     kfunc_call_void(do_group_exit, exit_code);
     kfunc_not_found();
+    __builtin_trap();
 }
 static inline void exit_files(struct task_struct *tsk)
 {

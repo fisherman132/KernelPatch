@@ -192,46 +192,41 @@ static int profile_command_exact(const char *command, const char *expected)
 
 static int profile_command_allowed(const char *command)
 {
-    static const char *exact[] = {
-        "backend_status",
-        "codes_abort",
-        "codes_begin",
-        "codes_commit",
-        "codes_status",
-        "environment_abort",
-        "environment_begin",
-        "environment_status",
-        "ksh capability",
-        "ksh status",
-        "metadata_abort",
-        "metadata_begin",
-        "metadata_commit",
-        "metadata_status",
-        "snapshot_abort",
-        "snapshot_commit",
-        "snapshot_rollback",
-        "snapshot_status",
-        "uids_clear",
-        0,
-    };
-    static const char *prefix[] = {
-        "codes_add ",
-        "environment_add ",
-        "identity_add ",
-        "metadata_add ",
-        "snapshot_begin ",
-        "uids_add ",
-        0,
-    };
-    int index;
-
     if (!command || !command[0]) return 0;
-    for (index = 0; exact[index]; index++) {
-        if (profile_command_exact(command, exact[index])) return 1;
-    }
-    for (index = 0; prefix[index]; index++) {
-        if (profile_command_prefix(command, prefix[index])) return 1;
-    }
+
+    /*
+     * kpimg is copied from its link address to a runtime address without
+     * applying ELF relocations.  Do not collect these string literals in a
+     * static pointer table: its entries would retain low link-time addresses
+     * and fault when the restricted broker scans the allowlist at runtime.
+     */
+    if (profile_command_exact(command, "backend_status")) return 1;
+    if (profile_command_exact(command, "codes_abort")) return 1;
+    if (profile_command_exact(command, "codes_begin")) return 1;
+    if (profile_command_exact(command, "codes_commit")) return 1;
+    if (profile_command_exact(command, "codes_status")) return 1;
+    if (profile_command_exact(command, "environment_abort")) return 1;
+    if (profile_command_exact(command, "environment_begin")) return 1;
+    if (profile_command_exact(command, "environment_status")) return 1;
+    if (profile_command_exact(command, "ksh capability")) return 1;
+    if (profile_command_exact(command, "ksh observer-status")) return 1;
+    if (profile_command_exact(command, "ksh status")) return 1;
+    if (profile_command_exact(command, "metadata_abort")) return 1;
+    if (profile_command_exact(command, "metadata_begin")) return 1;
+    if (profile_command_exact(command, "metadata_commit")) return 1;
+    if (profile_command_exact(command, "metadata_status")) return 1;
+    if (profile_command_exact(command, "snapshot_abort")) return 1;
+    if (profile_command_exact(command, "snapshot_commit")) return 1;
+    if (profile_command_exact(command, "snapshot_rollback")) return 1;
+    if (profile_command_exact(command, "snapshot_status")) return 1;
+    if (profile_command_exact(command, "uids_clear")) return 1;
+
+    if (profile_command_prefix(command, "codes_add ")) return 1;
+    if (profile_command_prefix(command, "environment_add ")) return 1;
+    if (profile_command_prefix(command, "identity_add ")) return 1;
+    if (profile_command_prefix(command, "metadata_add ")) return 1;
+    if (profile_command_prefix(command, "snapshot_begin ")) return 1;
+    if (profile_command_prefix(command, "uids_add ")) return 1;
     return 0;
 }
 
@@ -296,6 +291,7 @@ static long call_kpm_info(const char *__user uname, char *__user out_info, int o
     if (len <= 0) return -EINVAL;
     int sz = get_module_info(name, buf, sizeof(buf));
     if (sz < 0) return sz;
+    if (sz >= (int)sizeof(buf)) return -ENOBUFS;
     if (sz > out_len) return -ENOBUFS;
     sz = compat_copy_to_user(out_info, buf, sz);
     return sz;

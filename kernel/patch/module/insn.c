@@ -167,7 +167,7 @@ bool aarch64_insn_hotpatch_safe(u32 old_insn, u32 new_insn)
 int aarch64_insn_patch_text_nosync(void *addr, u32 insn)
 {
     u32 *tp = addr;
-    int ret;
+    int ret = 0;
     if ((uintptr_t)tp & 0x3) return -EINVAL;
     aarch64_insn_write(tp, insn);
     flush_icache_range((uintptr_t)tp, (uintptr_t)tp + AARCH64_INSN_SIZE);
