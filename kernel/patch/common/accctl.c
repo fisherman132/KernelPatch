@@ -48,6 +48,11 @@ static void su_cred(struct cred *cred, uid_t uid)
     *(uid_t *)((uintptr_t)cred + cred_offset.sgid_offset) = uid;
 }
 
+void prepare_root_cred_fields(struct cred *cred)
+{
+    su_cred(cred, 0);
+}
+
 int set_all_allow_sctx(const char *sctx)
 {
     if (!sctx || !sctx[0]) {

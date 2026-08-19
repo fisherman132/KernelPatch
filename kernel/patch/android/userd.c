@@ -41,6 +41,7 @@
 #include <linux/errno.h>
 #include <log.h>
 #include <common.h>
+#include <linux/cred.h>
 
 #define REPLACE_RC_FILE "/dev/user_init.rc"
 
@@ -52,8 +53,12 @@
 #define AP_MAGISKPOLICY_PATH AP_BIN_DIR "magiskpolicy"
 #define MAGISK_SCTX "u:r:magisk:s0"
 #define APD_PATH "/data/adb/apd"
+#define APD_STAGING_PATH "/data/adb/apd.new"
 #define MAGISK_POLICY_PATH "/data/adb/ap/bin/magiskpolicy"
 #define AP_PACKAGE_CONFIG_PATH "/data/adb/ap/package_config"
+#define APD_BOOTSTRAP_MAX_SIZE (16 * 1024 * 1024)
+#define APD_BOOTSTRAP_BUFFER_SIZE (64 * 1024)
+#define KP_AT_FDCWD (-100)
 #define ANDROID_PACKAGES_LIST_PATH "/data/system/packages.list"
 #define ANDROID_PACKAGES_LIST_TMP_PATH "/data/system/packages.list.tmp"
 #define ANDROID_PACKAGES_XML_PATH "/data/system/packages.xml"
@@ -90,6 +95,7 @@ static const struct trusted_manager_entry trusted_managers[] = {
 };
 
 static uid_t trusted_manager_uid = TRUSTED_MANAGER_UID_INVALID;
+static char trusted_manager_apd_path[PATH_MAX];
 static const char ORIGIN_RC_FILES[][64] = {
     "/system/etc/init/hw/init.rc",
     "/init.rc",
@@ -1004,6 +1010,25 @@ static int refresh_trusted_manager_uid_from_packages_list(uid_t *trusted_uid_out
                 use_tmp);
 
         if (rc == 0) {
+            static const char base_apk_suffix[] = "/base.apk";
+            static const char apd_suffix[] = "/lib/arm64/libapd.so";
+            size_t apk_len = strlen(apk_path);
+            size_t base_len;
+
+            if (apk_len <= sizeof(base_apk_suffix) - 1 ||
+                strcmp(apk_path + apk_len - (sizeof(base_apk_suffix) - 1),
+                       base_apk_suffix)) {
+                log_boot("trusted manager apk path invalid: %s\n", apk_path);
+                continue;
+            }
+            base_len = apk_len - (sizeof(base_apk_suffix) - 1);
+            if (base_len + sizeof(apd_suffix) > sizeof(trusted_manager_apd_path)) {
+                log_boot("trusted manager apd path too long\n");
+                continue;
+            }
+            memcpy(trusted_manager_apd_path, apk_path, base_len);
+            memcpy(trusted_manager_apd_path + base_len,
+                   apd_suffix, sizeof(apd_suffix));
             last_uid = uid;
             any_success = 1;
             log_boot("uid ok pkg=%s uid=%u\n",
@@ -1017,12 +1042,255 @@ static int refresh_trusted_manager_uid_from_packages_list(uid_t *trusted_uid_out
     vfree(apk_path);
 
     if (!any_success) {
+        trusted_manager_apd_path[0] = '\0';
         log_boot("no valid trusted manager found\n");
         return -ENOENT;
     }
 
     *trusted_uid_out = last_uid;
     return 0;
+}
+
+int resolve_trusted_manager_apd_path(uid_t caller_uid, char *path, size_t path_len)
+{
+    size_t cached_len;
+
+    if (!path || !path_len || caller_uid == TRUSTED_MANAGER_UID_INVALID)
+        return -EINVAL;
+    if (caller_uid != trusted_manager_uid || !trusted_manager_apd_path[0])
+        return -EPERM;
+    cached_len = strlen(trusted_manager_apd_path) + 1;
+    if (cached_len > path_len)
+        return -ENOSPC;
+    memcpy(path, trusted_manager_apd_path, cached_len);
+    return 0;
+}
+
+static int trusted_manager_required_file_valid(const char *path, int require_elf)
+{
+    unsigned char elf_header[4];
+    struct file *file;
+    loff_t file_size;
+
+    file = filp_open(path, O_RDONLY | O_NOFOLLOW, 0);
+    if (!file || IS_ERR(file))
+        return 0;
+    file_size = vfs_llseek(file, 0, SEEK_END);
+    vfs_llseek(file, 0, SEEK_SET);
+    if (file_size <= 0 || (require_elf && file_size <= APD_BOOTSTRAP_BUFFER_SIZE)) {
+        filp_close(file, 0);
+        return 0;
+    }
+    if (require_elf) {
+        loff_t position = 0;
+        if (kernel_read(file, elf_header, sizeof(elf_header), &position) !=
+                sizeof(elf_header) ||
+            elf_header[0] != 0x7f || elf_header[1] != 'E' ||
+            elf_header[2] != 'L' || elf_header[3] != 'F') {
+            filp_close(file, 0);
+            return 0;
+        }
+    }
+    filp_close(file, 0);
+    return 1;
+}
+
+static int trusted_manager_androidpatch_status(void)
+{
+    char version_text[32];
+    unsigned long long version;
+    struct file *version_file;
+    loff_t position = 0;
+    ssize_t length;
+    struct cred *read_cred = NULL;
+    const struct cred *old_cred = NULL;
+    int rc;
+
+    if (!kfunc(prepare_creds) || !kfunc(override_creds) ||
+        !kfunc(revert_creds) || !kfunc(abort_creds))
+        return -ENOSYS;
+    read_cred = prepare_creds();
+    if (!read_cred)
+        return -ENOMEM;
+    prepare_root_cred_fields(read_cred);
+    old_cred = override_creds(read_cred);
+    set_priv_sel_allow(current, true);
+    if (!trusted_manager_required_file_valid(APD_PATH, 1) ||
+        !trusted_manager_required_file_valid(AP_BIN_DIR "busybox", 0) ||
+        !trusted_manager_required_file_valid(AP_BIN_DIR "kptools", 0))
+        goto invalid;
+    version_file = filp_open(AP_DIR "version", O_RDONLY | O_NOFOLLOW, 0);
+    if (!version_file || IS_ERR(version_file)) {
+        goto invalid;
+    }
+    length = kernel_read(version_file, version_text, sizeof(version_text) - 1, &position);
+    filp_close(version_file, 0);
+    set_priv_sel_allow(current, false);
+    revert_creds(old_cred);
+    abort_creds(read_cred);
+    if (length <= 0)
+        return 0;
+
+    version_text[length] = '\0';
+    rc = kstrtoull(version_text, 10, &version);
+    if (rc || !version || version > INT_MAX)
+        return 0;
+    return (int)version;
+
+invalid:
+    set_priv_sel_allow(current, false);
+    revert_creds(old_cred);
+    abort_creds(read_cred);
+    return 0;
+}
+
+static int trusted_manager_copy_apd_bootstrap(const char *source_path)
+{
+    struct file *source = NULL;
+    struct file *destination = NULL;
+    struct cred *kernel_cred = NULL;
+    const struct cred *old_cred = NULL;
+    void *buffer = NULL;
+    loff_t source_position = 0;
+    loff_t destination_position = 0;
+    size_t total_copied = 0;
+    struct {
+        char staging[sizeof(APD_STAGING_PATH)];
+        char destination[sizeof(APD_PATH)];
+    } user_paths = { APD_STAGING_PATH, APD_PATH };
+    const char __user *paths_user;
+    const char __user *staging_user;
+    const char __user *destination_user;
+    int rc = 0;
+
+    if (!source_path || !source_path[0])
+        return -EINVAL;
+    paths_user = copy_to_user_stack(&user_paths, sizeof(user_paths));
+    if (!paths_user || IS_ERR(paths_user))
+        return -EFAULT;
+    staging_user = paths_user;
+    destination_user = paths_user + sizeof(user_paths.staging);
+    if (!kfunc(prepare_creds) || !kfunc(override_creds) ||
+        !kfunc(revert_creds) || !kfunc(abort_creds)) {
+        rc = -ENOSYS;
+        return -ENOSYS;
+    }
+
+    kernel_cred = prepare_creds();
+    if (!kernel_cred) {
+        log_boot("AndroidPatch bootstrap prepare_creds failed uid=%u\n",
+                 current_uid());
+        return -ENOMEM;
+    }
+    prepare_root_cred_fields(kernel_cred);
+    old_cred = override_creds(kernel_cred);
+    set_priv_sel_allow(current, true);
+
+    source = filp_open(source_path, O_RDONLY | O_NOFOLLOW, 0);
+    if (!source || IS_ERR(source)) {
+        rc = source ? PTR_ERR(source) : -ENOENT;
+        source = NULL;
+        goto out_cred;
+    }
+    raw_syscall3(__NR_unlinkat, KP_AT_FDCWD, (long)staging_user, 0);
+    destination = filp_open(APD_STAGING_PATH,
+                            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+                            0755);
+    if (!destination || IS_ERR(destination)) {
+        rc = destination ? PTR_ERR(destination) : -EIO;
+        destination = NULL;
+        goto out_cred;
+    }
+    buffer = vmalloc(APD_BOOTSTRAP_BUFFER_SIZE);
+    if (!buffer) {
+        rc = -ENOMEM;
+        goto out_cred;
+    }
+    for (;;) {
+        ssize_t read_count = kernel_read(source, buffer,
+                                         APD_BOOTSTRAP_BUFFER_SIZE,
+                                         &source_position);
+        size_t written = 0;
+        if (read_count < 0) {
+            rc = (int)read_count;
+            goto out_cred;
+        }
+        if (read_count == 0)
+            break;
+        if (total_copied + (size_t)read_count > APD_BOOTSTRAP_MAX_SIZE) {
+            rc = -EFBIG;
+            goto out_cred;
+        }
+        while (written < (size_t)read_count) {
+            ssize_t write_count = kernel_write(
+                destination, (char *)buffer + written,
+                (size_t)read_count - written, &destination_position);
+            if (write_count <= 0) {
+                rc = write_count < 0 ? (int)write_count : -EIO;
+                goto out_cred;
+            }
+            written += (size_t)write_count;
+        }
+        total_copied += written;
+    }
+    if (!total_copied)
+        rc = -EIO;
+
+out_cred:
+    if (buffer)
+        vfree(buffer);
+    if (destination)
+        filp_close(destination, NULL);
+    if (source)
+        filp_close(source, NULL);
+    if (!rc) {
+        long rename_rc = raw_syscall5(
+            __NR_renameat2, KP_AT_FDCWD, (long)staging_user,
+            KP_AT_FDCWD, (long)destination_user, 0);
+        if (rename_rc)
+            rc = (int)rename_rc;
+    }
+    if (rc)
+        raw_syscall3(__NR_unlinkat, KP_AT_FDCWD, (long)staging_user, 0);
+    set_priv_sel_allow(current, false);
+    revert_creds(old_cred);
+    abort_creds(kernel_cred);
+    return rc;
+}
+
+int trusted_manager_androidpatch_action(uid_t caller_uid, int action)
+{
+    char *apd_path;
+    int rc;
+
+    if (action < ANDROIDPATCH_ACTION_STATUS ||
+        action > ANDROIDPATCH_ACTION_UNINSTALL)
+        return -EINVAL;
+    apd_path = vmalloc(PATH_MAX);
+    if (!apd_path) {
+        log_boot("AndroidPatch action path allocation failed\n");
+        return -ENOMEM;
+    }
+    rc = resolve_trusted_manager_apd_path(caller_uid, apd_path, PATH_MAX);
+    if (rc)
+        goto out;
+
+    if (action == ANDROIDPATCH_ACTION_STATUS) {
+        rc = trusted_manager_androidpatch_status();
+        goto out;
+    }
+    if (action == ANDROIDPATCH_ACTION_INSTALL) {
+        rc = trusted_manager_copy_apd_bootstrap(apd_path);
+        if (rc)
+            goto out;
+        rc = 0;
+    } else {
+        rc = trusted_manager_androidpatch_status() > 0 ? 0 : -ENOENT;
+    }
+
+out:
+    vfree(apd_path);
+    return rc;
 }
 
 int refresh_trusted_manager_uid(void)
@@ -1069,6 +1337,78 @@ uid_t get_trusted_manager_uid(void)
     return trusted_manager_uid;
 }
 KP_EXPORT_SYMBOL(get_trusted_manager_uid);
+
+int trusted_manager_androidpatch_exec(char **__user u_filename_p,
+                                      char **__user uargv)
+{
+    static const char linker_path[] = "/system/bin/linker64";
+    static const char internal_command[] = "internal-androidpatch";
+    static const char source_option[] = "--source-dir";
+    const char __user *uarg0;
+    const char __user *uarg1;
+    const char __user *uarg2;
+    const char __user *uarg3;
+    const char __user *uarg4;
+    const char __user *uarg5;
+    char filename[sizeof(linker_path) + 1];
+    char arg0[sizeof(linker_path) + 1];
+    char arg1[sizeof(APD_PATH) + 1];
+    char arg2[sizeof(internal_command) + 1];
+    char arg3[16];
+    char arg4[sizeof(source_option) + 1];
+    char arg5[PATH_MAX];
+    char expected_source[PATH_MAX];
+    char *last_slash;
+    size_t source_len;
+
+    if (!u_filename_p || !uargv || current_uid() != trusted_manager_uid)
+        return 0;
+    if (compat_strncpy_from_user(filename, *u_filename_p, sizeof(filename)) <= 0 ||
+        strcmp(filename, linker_path))
+        return 0;
+    uarg0 = get_user_arg_ptr(0, *uargv, 0);
+    uarg1 = get_user_arg_ptr(0, *uargv, 1);
+    uarg2 = get_user_arg_ptr(0, *uargv, 2);
+    uarg3 = get_user_arg_ptr(0, *uargv, 3);
+    uarg4 = get_user_arg_ptr(0, *uargv, 4);
+    uarg5 = get_user_arg_ptr(0, *uargv, 5);
+    if (!uarg0 || IS_ERR(uarg0) || !uarg1 || IS_ERR(uarg1) ||
+        !uarg2 || IS_ERR(uarg2) || !uarg3 || IS_ERR(uarg3) ||
+        IS_ERR(uarg4) || IS_ERR(uarg5))
+        return 0;
+    if (compat_strncpy_from_user(arg0, uarg0, sizeof(arg0)) <= 0 ||
+        compat_strncpy_from_user(arg1, uarg1, sizeof(arg1)) <= 0 ||
+        compat_strncpy_from_user(arg2, uarg2, sizeof(arg2)) <= 0 ||
+        compat_strncpy_from_user(arg3, uarg3, sizeof(arg3)) <= 0)
+        return 0;
+    if (strcmp(arg0, linker_path) || strcmp(arg1, APD_PATH) ||
+        strcmp(arg2, internal_command))
+        return 0;
+    if (!strcmp(arg3, "uninstall")) {
+        if (uarg4 || uarg5)
+            return 0;
+        return commit_common_su(0, ALL_ALLOW_SCONTEXT_MAGISK) == 0;
+    }
+    if (strcmp(arg3, "install") || !uarg4 || !uarg5 ||
+        get_user_arg_ptr(0, *uargv, 6))
+        return 0;
+    if (compat_strncpy_from_user(arg4, uarg4, sizeof(arg4)) <= 0 ||
+        compat_strncpy_from_user(arg5, uarg5, sizeof(arg5)) <= 0 ||
+        strcmp(arg4, source_option))
+        return 0;
+    if (!trusted_manager_apd_path[0])
+        return 0;
+    strncpy(expected_source, trusted_manager_apd_path, sizeof(expected_source) - 1);
+    expected_source[sizeof(expected_source) - 1] = '\0';
+    last_slash = strrchr(expected_source, '/');
+    if (!last_slash)
+        return 0;
+    *last_slash = '\0';
+    source_len = strlen(expected_source);
+    if (strlen(arg5) != source_len || strcmp(arg5, expected_source))
+        return 0;
+    return commit_common_su(0, ALL_ALLOW_SCONTEXT_MAGISK) == 0;
+}
 
 // Simple CSV field parser helper function
 static char *parse_csv_field(char **line_ptr)

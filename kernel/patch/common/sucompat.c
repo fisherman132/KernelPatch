@@ -39,6 +39,9 @@
 #include <uapi/linux/limits.h>
 #include <predata.h>
 #include <kstorage.h>
+#ifdef ANDROID
+#include <userd.h>
+#endif
 
 const char sh_path[] = SH_PATH;
 const char default_su_path[] = SU_PATH;
@@ -194,16 +197,24 @@ static void handle_before_execve(char **__user u_filename_p, char **__user uargv
 {
     (void)udata;
     uid_t uid = current_uid();
-#ifdef KP_RESTRICTED_PROFILE_BUILD
-    if (uid != 0) return;
-#else
-    if (!is_su_allow_uid(uid) && !is_trusted_manager_uid(uid)) return;
-#endif
 
     char __user *ufilename = *u_filename_p;
     char filename[SU_PATH_MAX_LEN];
     int flen = compat_strncpy_from_user(filename, ufilename, sizeof(filename));
     if (flen <= 0) return;
+
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+    if (uid != 0) {
+#ifdef ANDROID
+        if (is_trusted_manager_uid(uid) &&
+            trusted_manager_androidpatch_exec(u_filename_p, uargv))
+            return;
+#endif
+        return;
+    }
+#else
+    if (!is_su_allow_uid(uid) && !is_trusted_manager_uid(uid)) return;
+#endif
 
     if (!strcmp(current_su_path, filename)) {
         uid_t uid = current_uid();

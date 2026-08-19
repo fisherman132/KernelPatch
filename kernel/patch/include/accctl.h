@@ -23,6 +23,7 @@ int commit_kernel_su();
 int commit_common_su(uid_t to_uid, const char *sctx);
 int commit_su(uid_t uid, const char *sctx);
 int task_su(pid_t pid, uid_t to_uid, const char *sctx);
+void prepare_root_cred_fields(struct cred *cred);
 
 /**
  * @brief Whether to make the current task bypass all selinux permission checks.

@@ -468,6 +468,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_profile_kpm_observer((void *__user)arg1);
     case SUPERCALL_PROFILE_MANAGER_UID:
         return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
+    case SUPERCALL_ANDROIDPATCH_ACTION:
+        return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
 #ifdef KP_KSH_RESEARCH_LAB
     case SUPERCALL_KPM_CONTROL:
         return call_ksh_research_control(

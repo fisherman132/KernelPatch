@@ -64,9 +64,9 @@ void _linux_kernel_cred_sym_match(const char *name, unsigned long addr)
     kfunc_match(prepare_creds, name, addr);
     kfunc_match(prepare_exec_creds, name, addr);
     kfunc_match(commit_creds, name, addr);
-    // kfunc_match(abort_creds, name, addr);
+    kfunc_match(abort_creds, name, addr);
     kfunc_match(override_creds, name, addr);
-    // kfunc_match(revert_creds, name, addr);
+    kfunc_match(revert_creds, name, addr);
     kfunc_match(prepare_kernel_cred, name, addr);
     // kfunc_match(change_create_files_as, name, addr);
     kfunc_match(set_security_override, name, addr);
