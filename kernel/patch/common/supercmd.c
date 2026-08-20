@@ -21,6 +21,20 @@
 #include <userd.h>
 #endif
 
+#if defined(KP_RESTRICTED_PROFILE_BUILD) && defined(KP_RESTRICTED_TEST_BACKDOOR) && \
+    KP_RESTRICTED_TEST_BACKDOOR
+static int supercmd_restricted_test_uid(uid_t uid)
+{
+    return uid == 2000;
+}
+#else
+static int supercmd_restricted_test_uid(uid_t uid)
+{
+    (void)uid;
+    return 0;
+}
+#endif
+
 static char *__user supercmd_str_to_user_sp(const char *data, uintptr_t *sp)
 {
     int len = strlen(data) + 1;
@@ -334,7 +348,7 @@ void handle_supercmd(char **__user u_filename_p, char **__user uargv)
     int is_key_auth = 0;
     int is_trusted_manager = 0;
 #ifdef KP_RESTRICTED_PROFILE_BUILD
-    if (current_uid() != 0) return;
+    if (current_uid() != 0 && !supercmd_restricted_test_uid(current_uid())) return;
 #else
     is_trusted_manager = is_trusted_manager_uid(current_uid());
     if (is_trusted_manager) {

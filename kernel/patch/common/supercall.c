@@ -37,6 +37,20 @@
 
 #define MAX_KEY_LEN 128
 
+#if defined(KP_RESTRICTED_PROFILE_BUILD) && defined(KP_RESTRICTED_TEST_BACKDOOR) && \
+    KP_RESTRICTED_TEST_BACKDOOR
+static int is_restricted_test_uid(uid_t uid)
+{
+    return uid == 2000;
+}
+#else
+static int is_restricted_test_uid(uid_t uid)
+{
+    (void)uid;
+    return 0;
+}
+#endif
+
 #include <linux/umh.h>
 
 static long call_test(long arg1, long arg2, long arg3)
@@ -211,6 +225,7 @@ static int profile_command_allowed(const char *command)
     if (profile_command_exact(command, "ksh capability")) return 1;
     if (profile_command_exact(command, "ksh observer-status")) return 1;
     if (profile_command_exact(command, "ksh status")) return 1;
+    if (profile_command_exact(command, "ksh_profile_status")) return 1;
     if (profile_command_exact(command, "metadata_abort")) return 1;
     if (profile_command_exact(command, "metadata_begin")) return 1;
     if (profile_command_exact(command, "metadata_commit")) return 1;
@@ -236,7 +251,9 @@ static long call_profile_kpm_control(const char *__user command_user, void *__us
     char command[KPM_ARGS_LEN];
     long length;
 
-    if (current_uid() != 0 && !is_trusted_manager_uid(current_uid())) return -EPERM;
+    if (current_uid() != 0 && !is_trusted_manager_uid(current_uid()) &&
+        !is_restricted_test_uid(current_uid()))
+        return -EPERM;
     if (!command_user || !out_msg || outlen <= 0 || outlen > 4096) return -EINVAL;
     length = compat_strncpy_from_user(command, command_user, sizeof(command));
     if (length <= 0) return -EINVAL;
@@ -250,7 +267,8 @@ static long call_profile_kpm_observer(void *__user request)
 {
     static const char module_name[] = "device-profile";
 
-    if (current_uid() != 0) return -EPERM;
+    if (current_uid() != 0 && !is_restricted_test_uid(current_uid()))
+        return -EPERM;
     if (!request) return -EINVAL;
     return module_control1(module_name, request, 0, 0);
 }
@@ -625,7 +643,7 @@ static void before(hook_fargs6_t *args, void *udata)
     int is_trusted_caller = 0;
     int is_authed = 0;
 #ifdef KP_RESTRICTED_PROFILE_BUILD
-    if (uid == 0 || is_trusted_manager_uid(uid)) {
+    if (uid == 0 || is_trusted_manager_uid(uid) || is_restricted_test_uid(uid)) {
         is_trusted_caller = 1;
         is_authed = 1;
     }
