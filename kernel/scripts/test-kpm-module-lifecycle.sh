@@ -148,7 +148,7 @@ for state in ("MODULE_LIVE", "MODULE_EXITING", "MODULE_INIT_FAILED"):
     require(code_source, rf"\b{state}\b", f"{state} used by the loader")
 require(module_header_code, r"atomic_t\s+active_calls\s*;", "active callback counter")
 require(module_header_code, r"bool\s+resident\s*;", "resident module attribute")
-require(code_source, r"get_modinfo\s*\(\s*info\s*,\s*\"resident\"\s*\)",
+require(source, r"get_modinfo\s*\(\s*info\s*,\s*\"resident\"\s*\)",
         "resident module metadata parser")
 require(code_source, r"spin_lock[^;]*module_lock", "module registry lock acquisition")
 require(code_source, r"spin_unlock[^;]*module_lock", "module registry lock release")
