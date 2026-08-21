@@ -93,8 +93,6 @@ static long call_buildtime(char __user *out_buildtime, int u_len)
     return rc;
 }
 
-#if !defined(KP_RESTRICTED_PROFILE_BUILD) || defined(KP_KSH_RESEARCH_LAB) || \
-    (defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR)
 static long call_kpm_load(const char __user *arg1, const char *__user arg2, void *__user reserved)
 {
     char path[1024], args[KPM_ARGS_LEN];
@@ -112,7 +110,6 @@ static long call_kpm_control(const char __user *arg1, const char *__user arg2, v
     long arglen = compat_strncpy_from_user(args, arg2, sizeof(args));
     return module_control0(name, arglen <= 0 ? 0 : args, out_msg, outlen);
 }
-#endif
 
 #ifdef ANDROID
 static int profile_command_prefix(const char *command, const char *prefix);
@@ -355,8 +352,6 @@ static long call_ksh_core_request(void *__user payload)
 }
 #endif
 
-#if !defined(KP_RESTRICTED_PROFILE_BUILD) || \
-    (defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR)
 static long call_kpm_unload(const char *__user arg1, void *__user reserved)
 {
     char name[KPM_NAME_LEN];
@@ -420,7 +415,6 @@ static long call_kpm_info(const char *__user uname, char *__user out_info, int o
     kvfree(buf);
     return sz;
 }
-#endif
 
 #ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su(struct su_profile *__user uprofile)
@@ -601,42 +595,48 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
     case SUPERCALL_ANDROIDPATCH_ACTION:
         return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
     case SUPERCALL_KPM_CONTROL:
-#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
-        if (current_uid() == 2000 || is_trusted_manager_uid(current_uid()))
+        if (is_trusted_manager_uid(current_uid()) ||
+            is_restricted_test_uid(current_uid()))
             return call_kpm_control(
                 (const char *__user)arg1,
                 (const char *__user)arg2,
                 (char *__user)arg3, (int)arg4);
-#endif
 #ifdef KP_KSH_RESEARCH_LAB
         return call_ksh_research_control(
             (const char *__user)arg1,
             (const char *__user)arg2,
             (char *__user)arg3, (int)arg4);
 #else
-        return -EPERM;
+        return current_uid() == 0 ?
+            call_kpm_control(
+                (const char *__user)arg1,
+                (const char *__user)arg2,
+                (char *__user)arg3, (int)arg4) : -EPERM;
 #endif
-#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
     case SUPERCALL_KPM_LOAD:
-        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_load((const char *__user)arg1,
                           (const char *__user)arg2,
                           (void *__user)arg3) : -EPERM;
     case SUPERCALL_KPM_NUMS:
-        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_nums() : -EPERM;
     case SUPERCALL_KPM_LIST:
-        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_list((char *__user)arg1, (int)arg2) : -EPERM;
     case SUPERCALL_KPM_INFO:
-        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_info((const char *__user)arg1,
                           (char *__user)arg2, (int)arg3) : -EPERM;
     case SUPERCALL_KPM_UNLOAD:
-        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_unload((const char *__user)arg1,
                             (void *__user)arg2) : -EPERM;
-#endif
 #endif
     default:
         return -EPERM;

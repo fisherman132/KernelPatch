@@ -10,6 +10,7 @@ TEST_SOURCE="$KERNEL_DIR/tests/kpm_module_lifecycle_test.c"
 MODULE_SOURCE="$KERNEL_DIR/patch/module/module.c"
 MODULE_HEADER="$KERNEL_DIR/patch/include/module.h"
 RCU_HEADER="$KERNEL_DIR/linux/include/linux/rcupdate.h"
+SUPERCALL_SOURCE="$KERNEL_DIR/patch/common/supercall.c"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kpm-module-lifecycle.XXXXXX")
 
 cleanup()
@@ -33,8 +34,9 @@ require_file "$TEST_SOURCE"
 require_file "$MODULE_SOURCE"
 require_file "$MODULE_HEADER"
 require_file "$RCU_HEADER"
+require_file "$SUPERCALL_SOURCE"
 
-python3 - "$MODULE_SOURCE" "$MODULE_HEADER" "$RCU_HEADER" <<'PY' || exit $?
+python3 - "$MODULE_SOURCE" "$MODULE_HEADER" "$RCU_HEADER" "$SUPERCALL_SOURCE" <<'PY' || exit $?
 import re
 import sys
 from pathlib import Path
@@ -43,6 +45,7 @@ source_path = Path(sys.argv[1])
 source = source_path.read_text(encoding="utf-8")
 module_header = Path(sys.argv[2]).read_text(encoding="utf-8")
 rcu_header = Path(sys.argv[3]).read_text(encoding="utf-8")
+supercall_source = Path(sys.argv[4]).read_text(encoding="utf-8")
 
 
 def fail(message: str) -> None:
@@ -150,6 +153,33 @@ require(module_header_code, r"atomic_t\s+active_calls\s*;", "active callback cou
 require(module_header_code, r"bool\s+resident\s*;", "resident module attribute")
 require(source, r"get_modinfo\s*\(\s*info\s*,\s*\"resident\"\s*\)",
         "resident module metadata parser")
+restricted_dispatch = re.search(
+    r"#ifdef KP_RESTRICTED_PROFILE_BUILD(?P<body>.*?)#endif\s*\n\s*switch \(cmd\)",
+    supercall_source,
+    re.S,
+)
+if not restricted_dispatch:
+    fail("cannot locate restricted supercall dispatch")
+restricted_body = restricted_dispatch.group("body")
+for command, helper in (
+    ("SUPERCALL_KPM_LOAD", "call_kpm_load"),
+    ("SUPERCALL_KPM_CONTROL", "call_kpm_control"),
+    ("SUPERCALL_KPM_NUMS", "call_kpm_nums"),
+    ("SUPERCALL_KPM_LIST", "call_kpm_list"),
+    ("SUPERCALL_KPM_INFO", "call_kpm_info"),
+    ("SUPERCALL_KPM_UNLOAD", "call_kpm_unload"),
+):
+    case = re.search(
+        rf"case\s+{command}\s*:(?P<body>.*?)(?=case\s+SUPERCALL_|#endif)",
+        restricted_body,
+        re.S,
+    )
+    if not case or helper not in case.group("body"):
+        fail(f"restricted trusted-manager dispatch missing {command}")
+    if "is_trusted_manager_uid(current_uid())" not in case.group("body"):
+        fail(f"restricted KPM dispatch is not gated by trusted manager for {command}")
+if re.search(r"current_uid\(\)\s*==\s*2000", restricted_body):
+    fail("restricted production dispatch directly trusts shell UID 2000")
 require(code_source, r"spin_lock[^;]*module_lock", "module registry lock acquisition")
 require(code_source, r"spin_unlock[^;]*module_lock", "module registry lock release")
 require(rcu_header_code, r"kfunc_call_void\s*\(\s*synchronize_rcu\s*\)",
