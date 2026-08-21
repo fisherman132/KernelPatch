@@ -44,6 +44,7 @@ struct model_module {
     void *opaque;
     char *ctl_args;
     bool ctl_active;
+    bool resident;
 };
 
 struct model_registry {
@@ -363,6 +364,7 @@ static long model_unload(struct model_registry *registry, const char *name)
     if (!registry || !name) return -EINVAL;
     module = registry_find(registry, name);
     if (!module) return -ENOENT;
+    if (module->resident) return -EBUSY;
     if (module->state != MODULE_LIVE && module->state != MODULE_INIT_FAILED) return -EBUSY;
 
     restore_state = module->state;
@@ -723,6 +725,27 @@ static void test_exiting_and_double_unload_are_rejected(void)
     CHECK_LONG(test, 1, fixture.exit_calls);
 }
 
+static void test_resident_module_rejects_unload_before_exit(void)
+{
+    static const char test[] = "resident module rejects unload before exit";
+    struct model_registry registry;
+    struct callback_fixture fixture;
+    struct model_module *module = NULL;
+
+    registry_init(&registry);
+    fixture = fixture_make(&registry);
+    CHECK_LONG(test, 0,
+               model_load(&registry, "resident", &fixture_callbacks, &fixture, &module));
+    module->resident = true;
+    CHECK_LONG(test, -EBUSY, model_unload(&registry, "resident"));
+    CHECK(test, module->state == MODULE_LIVE);
+    CHECK_LONG(test, 0, fixture.exit_calls);
+    CHECK_LONG(test, 0, registry.frees);
+    CHECK_LONG(test, 0, registry.grace_periods);
+    module->resident = false;
+    CHECK_LONG(test, 0, model_unload(&registry, "resident"));
+}
+
 static void test_loading_name_is_unique(void)
 {
     static const char test[] = "same-name loading reservation is unique";
@@ -760,6 +783,7 @@ int main(void)
     test_acquire_rechecks_state_after_increment();
     test_event_removal_of_successor_keeps_traversal_safe();
     test_exiting_and_double_unload_are_rejected();
+    test_resident_module_rejects_unload_before_exit();
     test_loading_name_is_unique();
 
     puts("[PASS] KPM module lifecycle host model");

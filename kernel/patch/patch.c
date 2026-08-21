@@ -12,6 +12,7 @@
 #include <predata.h>
 #include <symbol.h>
 #include <linux/string.h>
+#include <ksh_route_broker.h>
 
 void print_bootlog()
 {
@@ -140,8 +141,13 @@ KP_EXPORT_SYMBOL(extra_event_init);
 
 static void before_kernel_init(hook_fargs4_t *args, void *udata)
 {
+    int rc;
+
     (void)args;
     (void)udata;
+    rc = kp_ksh_route_broker_init();
+    log_boot("ksh route broker init rc: %d, mask: %x\n",
+             rc, kp_ksh_route_installed());
     extra_event_init(EXTRA_EVENT_PRE_KERNEL_INIT);
 }
 
