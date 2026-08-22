@@ -116,6 +116,10 @@ static int profile_command_prefix(const char *command, const char *prefix);
 static int profile_command_exact(const char *command, const char *expected);
 
 #ifdef KP_KSH_RESEARCH_LAB
+#ifndef KP_KSH_RESEARCH_MODULE_NAME
+#define KP_KSH_RESEARCH_MODULE_NAME "ksh-r3-lab"
+#endif
+
 static uint32_t ksh_research_control_active;
 
 static int ksh_research_control_try_lock(void)
@@ -151,7 +155,7 @@ static long call_ksh_research_control(
     const char __user *module_user, const char *__user command_user,
     void *__user out_msg, int outlen)
 {
-    static const char module_name[] = "ksh-r3-lab";
+    static const char module_name[] = KP_KSH_RESEARCH_MODULE_NAME;
     char module[KPM_NAME_LEN];
     char command[KPM_ARGS_LEN];
     long module_length;
