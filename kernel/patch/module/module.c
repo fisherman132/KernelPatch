@@ -349,6 +349,7 @@ static int move_module(struct module *mod, struct load_info *info)
     if (info->info.license) mod->info.license = info->info.license - info->info.base + mod->info.base;
     if (info->info.author) mod->info.author = info->info.author - info->info.base + mod->info.base;
     if (info->info.description) mod->info.description = info->info.description - info->info.base + mod->info.base;
+    mod->info.resident = info->info.resident && !strcmp(info->info.resident, "1");
 
     return 0;
 }
@@ -409,6 +410,13 @@ static int setup_load_info(struct load_info *info)
     const char *description = get_modinfo(info, "description");
     info->info.description = description;
     logkd("    description: %s\n", description);
+    const char *resident = get_modinfo(info, "resident");
+    if (resident && strcmp(resident, "1")) {
+        set_load_error(info, "invalid resident attribute");
+        return -ENOEXEC;
+    }
+    info->info.resident = resident;
+    logkd("    resident: %s\n", resident ? resident : "");
 
     for (int i = 1; i < info->hdr->e_shnum; i++) {
         if (info->sechdrs[i].sh_type == SHT_SYMTAB) {
@@ -645,6 +653,10 @@ long unload_module(const char *name, void *__user reserved)
         return -ENOENT;
     }
     previous_state = module_state_load(mod);
+    if (mod->info.resident) {
+        spin_unlock(&module_lock);
+        return -EBUSY;
+    }
     if (previous_state != MODULE_LIVE && previous_state != MODULE_INIT_FAILED) {
         spin_unlock(&module_lock);
         return -EBUSY;
@@ -795,6 +807,7 @@ long module_control1(const char *name, void *a1, void *a2, void *a3)
     logkfi("name: %s, rc: %ld\n", name, rc);
     return rc;
 }
+KP_EXPORT_SYMBOL(module_control1);
 
 long notify_modules_event(const char *event, const char *args, void *__user reserved)
 {
@@ -909,12 +922,14 @@ int get_module_info(const char *name, char *out_info, int size)
                       "author=%s\n"
                       "description=%s\n"
                       "args=%s\n"
+                      "resident=%u\n"
                       "state=%u\n"
                       "init_rc=%ld\n"
                       "exit_rc=%ld\n",
                       safe_text(mod->info.name), safe_text(mod->info.version), safe_text(mod->info.license),
                       safe_text(mod->info.author), safe_text(mod->info.description),
-                      safe_text(mod->args), (unsigned int)module_state_load(mod), mod->init_rc, mod->exit_rc);
+                      safe_text(mod->args), mod->info.resident ? 1u : 0u,
+                      (unsigned int)module_state_load(mod), mod->init_rc, mod->exit_rc);
 
     if (sz < 0) {
         rcu_read_unlock();

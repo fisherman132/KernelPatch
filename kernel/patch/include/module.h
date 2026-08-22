@@ -15,7 +15,7 @@ struct load_info
     {
         const char *base;
         unsigned long size;
-        const char *name, *version, *license, *author, *description;
+        const char *name, *version, *license, *author, *description, *resident;
         char error_msg[KPM_LOAD_ERROR_MESSAGE_LEN];
     } info;
     const Elf_Ehdr *hdr;
@@ -42,6 +42,7 @@ struct module
     struct
     {
         const char *base, *name, *version, *license, *author, *description;
+        bool resident;
     } info;
 
     char *args;

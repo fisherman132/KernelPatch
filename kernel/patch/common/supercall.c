@@ -25,6 +25,7 @@
 #include <kputils.h>
 #include <linux/err.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <kputils.h>
 #include <predata.h>
 #include <linux/random.h>
@@ -92,7 +93,8 @@ static long call_buildtime(char __user *out_buildtime, int u_len)
     return rc;
 }
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
+#if !defined(KP_RESTRICTED_PROFILE_BUILD) || \
+    (defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR)
 static long call_kpm_load(const char __user *arg1, const char *__user arg2, void *__user reserved)
 {
     char path[1024], args[KPM_ARGS_LEN];
@@ -117,6 +119,10 @@ static int profile_command_prefix(const char *command, const char *prefix);
 static int profile_command_exact(const char *command, const char *expected);
 
 #ifdef KP_KSH_RESEARCH_LAB
+#ifndef KP_KSH_RESEARCH_MODULE_NAME
+#define KP_KSH_RESEARCH_MODULE_NAME "ksh-r3-lab"
+#endif
+
 static uint32_t ksh_research_control_active;
 
 static int ksh_research_control_try_lock(void)
@@ -152,7 +158,7 @@ static long call_ksh_research_control(
     const char __user *module_user, const char *__user command_user,
     void *__user out_msg, int outlen)
 {
-    static const char module_name[] = "ksh-r3-lab";
+    static const char module_name[] = KP_KSH_RESEARCH_MODULE_NAME;
     char module[KPM_NAME_LEN];
     char command[KPM_ARGS_LEN];
     long module_length;
@@ -177,6 +183,11 @@ static long call_ksh_research_control(
     if (!profile_command_exact(module, module_name) ||
         (!profile_command_exact(command, "ksh capability") &&
          !profile_command_exact(command, "ksh status") &&
+         !profile_command_exact(command, "ksh runtime-status") &&
+         !profile_command_exact(command, "ksh observer-status") &&
+         !profile_command_exact(command, "ksh provider-status") &&
+         !profile_command_exact(command, "ksh activate-step") &&
+         !profile_command_exact(command, "ksh activate") &&
          !profile_command_prefix(command, "ksh lab "))) {
         result = -EPERM;
         goto out;
@@ -222,9 +233,6 @@ static int profile_command_allowed(const char *command)
     if (profile_command_exact(command, "environment_abort")) return 1;
     if (profile_command_exact(command, "environment_begin")) return 1;
     if (profile_command_exact(command, "environment_status")) return 1;
-    if (profile_command_exact(command, "ksh capability")) return 1;
-    if (profile_command_exact(command, "ksh observer-status")) return 1;
-    if (profile_command_exact(command, "ksh status")) return 1;
     if (profile_command_exact(command, "ksh_profile_status")) return 1;
     if (profile_command_exact(command, "metadata_abort")) return 1;
     if (profile_command_exact(command, "metadata_begin")) return 1;
@@ -265,16 +273,94 @@ static long call_profile_kpm_control(const char *__user command_user, void *__us
 
 static long call_profile_kpm_observer(void *__user request)
 {
-    static const char module_name[] = "device-profile";
+    static const char module_name[] = "ksh-core";
+    struct {
+        uint64_t magic;
+        uint32_t abi_version;
+        uint32_t struct_size;
+        uint32_t operation;
+        uint32_t reserved;
+        uint64_t payload;
+        uint64_t reserved2[2];
+    } core_request = {
+        .magic = 0x4b5348434f524531ull,
+        .abi_version = 1u,
+        .struct_size = 48u,
+        .operation = 6u,
+        .payload = (uint64_t)request,
+    };
 
     if (current_uid() != 0 && !is_restricted_test_uid(current_uid()))
         return -EPERM;
     if (!request) return -EINVAL;
-    return module_control1(module_name, request, 0, 0);
+    return module_control1(module_name, &core_request, 0, 0);
+}
+
+#define KSH_CORE_REQUEST_MAGIC 0x4b5348434f524531ull
+#define KSH_CORE_REQUEST_ABI_VERSION 1u
+#define KSH_CORE_REQUEST_OBSERVER 6u
+
+struct restricted_ksh_core_request
+{
+    uint64_t magic;
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t operation;
+    uint32_t reserved;
+    uint64_t payload;
+    uint64_t reserved2[2];
+};
+
+static int ksh_core_command_allowed(const char *command)
+{
+    return profile_command_exact(command, "ksh capability") ||
+           profile_command_exact(command, "ksh observer-status") ||
+           profile_command_exact(command, "ksh provider-status") ||
+           profile_command_exact(command, "ksh runtime-status") ||
+           profile_command_exact(command, "ksh status");
+}
+
+static long call_ksh_core_control(
+    const char *__user command_user, void *__user out_msg, int outlen)
+{
+    static const char module_name[] = "ksh-core";
+    char command[KPM_ARGS_LEN];
+    long length;
+
+    if (current_uid() != 0 && !is_trusted_manager_uid(current_uid()) &&
+        !is_restricted_test_uid(current_uid()))
+        return -EPERM;
+    if (!command_user || !out_msg || outlen <= 0 || outlen > 4096)
+        return -EINVAL;
+    length = compat_strncpy_from_user(command, command_user, sizeof(command));
+    if (length <= 0) return -EINVAL;
+    if (length >= (long)sizeof(command) && command[sizeof(command) - 1])
+        return -E2BIG;
+    command[sizeof(command) - 1] = '\0';
+    if (!ksh_core_command_allowed(command)) return -EPERM;
+    return module_control0(module_name, command, out_msg, outlen);
+}
+
+static long call_ksh_core_request(void *__user payload)
+{
+    static const char module_name[] = "ksh-core";
+    struct restricted_ksh_core_request request = {
+        .magic = KSH_CORE_REQUEST_MAGIC,
+        .abi_version = KSH_CORE_REQUEST_ABI_VERSION,
+        .struct_size = sizeof(request),
+        .operation = KSH_CORE_REQUEST_OBSERVER,
+        .payload = (uint64_t)payload,
+    };
+
+    if (current_uid() != 0 && !is_restricted_test_uid(current_uid()))
+        return -EPERM;
+    if (!payload) return -EINVAL;
+    return module_control1(module_name, &request, 0, 0);
 }
 #endif
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
+#if !defined(KP_RESTRICTED_PROFILE_BUILD) || \
+    (defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR)
 static long call_kpm_unload(const char *__user arg1, void *__user reserved)
 {
     char name[KPM_NAME_LEN];
@@ -290,31 +376,57 @@ static long call_kpm_nums()
 
 static long call_kpm_list(char *__user names, int len)
 {
+    char *buf;
+    int copy_len;
+    int rc;
+    int sz;
+
     if (len <= 0) return -EINVAL;
-    char buf[4096] = { 0 };
-    int sz = list_modules(buf, sizeof(buf));
-    if (sz < 0) return sz;
-    if (sz > len) return -ENOBUFS;
-    int copy_len = sz > 0 ? sz : 1;
-    int rc = compat_copy_to_user(names, buf, copy_len);
+    buf = vmalloc(4096);
+    if (!buf) return -ENOMEM;
+    memset(buf, 0, 4096);
+    sz = list_modules(buf, 4096);
+    if (sz < 0) {
+        kvfree(buf);
+        return sz;
+    }
+    if (sz > len) {
+        kvfree(buf);
+        return -ENOBUFS;
+    }
+    copy_len = sz > 0 ? sz : 1;
+    rc = compat_copy_to_user(names, buf, copy_len);
+    kvfree(buf);
     return rc == copy_len ? sz : -EFAULT;
 }
 
 static long call_kpm_info(const char *__user uname, char *__user out_info, int out_len)
 {
+    char *buf;
+    int sz;
+
     if (out_len <= 0) return -EINVAL;
     char name[64];
-    char buf[2048];
     int len = compat_strncpy_from_user(name, uname, sizeof(name));
     if (len <= 0) return -EINVAL;
-    int sz = get_module_info(name, buf, sizeof(buf));
-    if (sz < 0) return sz;
-    if (sz >= (int)sizeof(buf)) return -ENOBUFS;
-    if (sz > out_len) return -ENOBUFS;
+    buf = vmalloc(2048);
+    if (!buf) return -ENOMEM;
+    sz = get_module_info(name, buf, 2048);
+    if (sz < 0) {
+        kvfree(buf);
+        return sz;
+    }
+    if (sz >= 2048 || sz > out_len) {
+        kvfree(buf);
+        return -ENOBUFS;
+    }
     sz = compat_copy_to_user(out_info, buf, sz);
+    kvfree(buf);
     return sz;
 }
+#endif
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su(struct su_profile *__user uprofile)
 {
     struct su_profile *profile = memdup_user(uprofile, sizeof(struct su_profile));
@@ -484,16 +596,50 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
     case SUPERCALL_PROFILE_KPM_OBSERVER:
         return call_profile_kpm_observer((void *__user)arg1);
+    case SUPERCALL_KSH_CORE_CONTROL:
+        return call_ksh_core_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+    case SUPERCALL_KSH_CORE_REQUEST:
+        return call_ksh_core_request((void *__user)arg1);
     case SUPERCALL_PROFILE_MANAGER_UID:
         return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
     case SUPERCALL_ANDROIDPATCH_ACTION:
         return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
-#ifdef KP_KSH_RESEARCH_LAB
     case SUPERCALL_KPM_CONTROL:
+#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
+        if (current_uid() == 2000 || is_trusted_manager_uid(current_uid()))
+            return call_kpm_control(
+                (const char *__user)arg1,
+                (const char *__user)arg2,
+                (char *__user)arg3, (int)arg4);
+#endif
+#ifdef KP_KSH_RESEARCH_LAB
         return call_ksh_research_control(
             (const char *__user)arg1,
             (const char *__user)arg2,
             (char *__user)arg3, (int)arg4);
+#else
+        return -EPERM;
+#endif
+#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
+    case SUPERCALL_KPM_LOAD:
+        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+            call_kpm_load((const char *__user)arg1,
+                          (const char *__user)arg2,
+                          (void *__user)arg3) : -EPERM;
+    case SUPERCALL_KPM_NUMS:
+        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+            call_kpm_nums() : -EPERM;
+    case SUPERCALL_KPM_LIST:
+        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+            call_kpm_list((char *__user)arg1, (int)arg2) : -EPERM;
+    case SUPERCALL_KPM_INFO:
+        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+            call_kpm_info((const char *__user)arg1,
+                          (char *__user)arg2, (int)arg3) : -EPERM;
+    case SUPERCALL_KPM_UNLOAD:
+        return (current_uid() == 2000 || is_trusted_manager_uid(current_uid())) ?
+            call_kpm_unload((const char *__user)arg1,
+                            (void *__user)arg2) : -EPERM;
 #endif
 #endif
     default:
@@ -565,6 +711,10 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return call_profile_kpm_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
     case SUPERCALL_PROFILE_KPM_OBSERVER:
         return call_profile_kpm_observer((void *__user)arg1);
+    case SUPERCALL_KSH_CORE_CONTROL:
+        return call_ksh_core_control((const char *__user)arg1, (void *__user)arg2, (int)arg3);
+    case SUPERCALL_KSH_CORE_REQUEST:
+        return call_ksh_core_request((void *__user)arg1);
     case SUPERCALL_PROFILE_MANAGER_UID:
         return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
     default:

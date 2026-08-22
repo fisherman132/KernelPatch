@@ -147,6 +147,9 @@ for state in ("MODULE_LIVE", "MODULE_EXITING", "MODULE_INIT_FAILED"):
     require(module_header_code, rf"\b{state}\b", f"{state} declaration")
     require(code_source, rf"\b{state}\b", f"{state} used by the loader")
 require(module_header_code, r"atomic_t\s+active_calls\s*;", "active callback counter")
+require(module_header_code, r"bool\s+resident\s*;", "resident module attribute")
+require(source, r"get_modinfo\s*\(\s*info\s*,\s*\"resident\"\s*\)",
+        "resident module metadata parser")
 require(code_source, r"spin_lock[^;]*module_lock", "module registry lock acquisition")
 require(code_source, r"spin_unlock[^;]*module_lock", "module registry lock release")
 require(rcu_header_code, r"kfunc_call_void\s*\(\s*synchronize_rcu\s*\)",
@@ -186,6 +189,13 @@ require(unload, r"active_calls", "unload gates active callbacks")
 require(unload, r"list_del_rcu\s*\(", "successful unload retires with list_del_rcu")
 require(unload, r"synchronize_rcu\s*\(", "unload waits for an RCU grace period")
 require(unload, r"previous_state", "unload retains the state restored after a veto")
+resident_gate = re.search(r"if\s*\(\s*mod->info\.resident\s*\)", unload)
+exiting_store = re.search(r"module_state_store\s*\(\s*mod\s*,\s*MODULE_EXITING\s*\)", unload)
+if not resident_gate or not exiting_store or resident_gate.start() >= exiting_store.start():
+    fail("resident module gate must run before the EXITING transition")
+exit_call_position = re.search(r"\(\*mod->exit\)\s*\(", unload)
+if not exit_call_position or resident_gate.start() >= exit_call_position.start():
+    fail("resident module gate must run before the exit callback")
 
 exit_call = re.search(r"(?P<lhs>(?:\b[a-zA-Z_][a-zA-Z0-9_]*->exit_rc\s*=\s*)?)\(\*(?P<obj>[a-zA-Z_][a-zA-Z0-9_]*)->exit\)\s*\(", unload)
 if not exit_call:

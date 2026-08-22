@@ -25,6 +25,7 @@
 #define KPM_LICENSE(x) KPM_INFO(license, x, KPM_LICENSE_LEN)
 #define KPM_AUTHOR(x) KPM_INFO(author, x, KPM_AUTHOR_LEN)
 #define KPM_DESCRIPTION(x) KPM_INFO(description, x, KPM_DESCRIPTION_LEN)
+#define KPM_RESIDENT() KPM_INFO(resident, "1", 2)
 
 typedef long (*mod_initcall_t)(const char *args, const char *event, void *reserved);
 typedef long (*mod_ctl0call_t)(const char *ctl_args, char *__user out_msg, int outlen);
