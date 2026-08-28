@@ -534,8 +534,12 @@ long unload_module(const char *name, void *__user reserved)
         rc = -ENOENT;
         goto out;
     }
-    list_del(&mod->list);
     rc = (*mod->exit)(reserved);
+    if (rc) {
+        logkfe("name: %s, exit rejected unload: %d\n", name, rc);
+        goto out;
+    }
+    list_del(&mod->list);
 
     if (mod->args) kvfree(mod->args);
     if (mod->ctl_args) kvfree(mod->ctl_args);
