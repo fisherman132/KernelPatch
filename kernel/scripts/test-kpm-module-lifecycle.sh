@@ -525,3 +525,4 @@ else
 fi
 
 printf '[PASS] KPM module lifecycle regression tests\n'
+"$SCRIPT_DIR/test-merged-security-boundaries.sh"

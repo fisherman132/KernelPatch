@@ -37,4 +37,11 @@ int get_ap_mod_exclude(uid_t uid);
 int set_ap_mod_exclude(uid_t uid, int exclude);
 int list_ap_mod_exclude(uid_t *uids, int len);
 
+/* Enable optional path-probe hooks after /data/adb becomes available. */
+void sucompat_init(void);
+
+/* Supercall handler: control a feature by name.
+ * state: 1=enable, 0=disable, -1=query current state. */
+long kp_control_feature_sc(const char __user *uname, int state);
+
 #endif

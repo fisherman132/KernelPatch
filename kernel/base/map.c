@@ -10,6 +10,7 @@
 typedef uint64_t phys_addr_t;
 typedef int (*memblock_reserve_f)(phys_addr_t base, phys_addr_t size);
 typedef phys_addr_t (*memblock_phys_alloc_try_nid_f)(phys_addr_t size, phys_addr_t align, int nid);
+typedef phys_addr_t (*memblock_alloc_try_nid_f)(phys_addr_t size, phys_addr_t align, int nid);
 typedef void *(*memblock_virt_alloc_try_nid_f)(phys_addr_t size, phys_addr_t align, phys_addr_t min_addr,
                                                phys_addr_t max_addr, int nid);
 typedef int (*memblock_free_f)(phys_addr_t base, phys_addr_t size);
@@ -66,9 +67,18 @@ static inline uint64_t phys_to_lm(map_data_t *data, uint64_t phys)
 
 static uint64_t map_phys_alloc(map_data_t *data, uint64_t size, uint64_t align)
 {
-    if (data->map_symbol.memblock_phys_alloc_type == MAP_SYM_MEMBLOCK_PHYS_ALLOC_TRY_NID ||
-        data->map_symbol.memblock_phys_alloc_type == MAP_SYM_MEMBLOCK_ALLOC_TRY_NID) {
-        return ((memblock_phys_alloc_try_nid_f)data->map_symbol.memblock_phys_alloc_relo)(size, align, NUMA_NO_NODE);
+    if (data->map_symbol.memblock_phys_alloc_type == MAP_SYM_MEMBLOCK_PHYS_ALLOC_TRY_NID) {
+        return ((memblock_phys_alloc_try_nid_f)data->map_symbol.memblock_phys_alloc_relo)(
+            size, align, NUMA_NO_NODE);
+    }
+
+    /* Linux 4.4-4.19 exposes the old three-argument, PA-returning name.
+     * Linux 4.20 changed this name to a five-argument VA-returning API and
+     * introduced memblock_phys_alloc_try_nid(), which the symbol resolver
+     * prefers. Therefore this fallback is only valid with the legacy ABI. */
+    if (data->map_symbol.memblock_phys_alloc_type == MAP_SYM_MEMBLOCK_ALLOC_TRY_NID) {
+        return ((memblock_alloc_try_nid_f)data->map_symbol.memblock_phys_alloc_relo)(
+            size, align, NUMA_NO_NODE);
     }
 
     return 0;
@@ -127,11 +137,14 @@ static __noinline void mem_proc(map_data_t *data)
     data->page_shift = page_shift;
 
     // linear
-    if (data->map_symbol.memblock_virt_alloc_relo) {
+    if (data->map_symbol.memblock_virt_alloc_relo &&
+        (data->map_symbol.memblock_virt_alloc_type == MAP_SYM_MEMBLOCK_VIRT_ALLOC_TRY_NID ||
+         data->map_symbol.memblock_virt_alloc_type == MAP_SYM_MEMBLOCK_VIRT_ALLOC_FROM_ALLOC_TRY_NID)) {
         uint64_t detect_phys =
             ((memblock_phys_alloc_try_nid_f)data->map_symbol.memblock_phys_alloc_relo)(0, 0x10, NUMA_NO_NODE);
         uint64_t detect_virt = (uint64_t)((memblock_virt_alloc_try_nid_f)data->map_symbol.memblock_virt_alloc_relo)(
             0, 0x10, detect_phys, detect_phys, NUMA_NO_NODE);
+        if (!detect_phys || !detect_virt || detect_virt < detect_phys) __builtin_trap();
         data->linear_voffset = detect_virt - detect_phys;
     } else {
         __builtin_trap();
@@ -178,6 +191,7 @@ static uint64_t __noinline get_or_create_pte(map_data_t *data, uint64_t va, uint
         } else { // invalid, alloc
             if (lv != 3) {
                 pxd_pa = map_phys_alloc(data, page_size, page_size);
+                if (!pxd_pa) __builtin_trap();
                 alloc_flag = 1;
             } else {
                 pxd_pa = pa;
@@ -225,6 +239,7 @@ void __noinline _paging_init()
     ((memblock_reserve_f)data->map_symbol.memblock_reserve_relo)(old_start_pa, reserve_size);
     // alloc
     uint64_t start_pa = map_phys_alloc(data, all_size, page_size);
+    if (!start_pa) __builtin_trap();
     // mark all size nomap
     if (data->map_symbol.memblock_mark_nomap_relo)
         ((memblock_mark_nomap_f)(data->map_symbol.memblock_mark_nomap_relo))(start_pa, all_size);

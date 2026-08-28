@@ -33,6 +33,7 @@
 #include <predata.h>
 #include <kconfig.h>
 #include <linux/vmalloc.h>
+#include <asm/atomic.h>
 #include <sucompat.h>
 #include <symbol.h>
 #include <kallsyms.h>
@@ -50,11 +51,53 @@ const char default_su_path[] = SU_PATH;
 const char legacy_su_path[] = LEGACY_SU_PATH;
 const char apd_path[] = APD_PATH;
 #endif
-
+/* Keep the adjacent compiler constant pool on an eight-byte boundary. The
+ * relocatable kpimg audit treats aligned in-image words as pointer slots. */
+static const char sucompat_file[24] __aligned(8) = "/data/adb/ap/sucompat";
 static const char *current_su_path = 0;
 
 static int su_kstorage_gid = -1;
 static int exclude_kstorage_gid = -1;
+enum {
+    SU_PATH_PROBES_OFF = 0,
+    SU_PATH_PROBES_TRANSITION = 1,
+    SU_PATH_PROBES_ON = 2,
+};
+static atomic_t su_path_probe_hooks_state = ATOMIC_INIT(SU_PATH_PROBES_OFF);
+static int su_register_path_probe_hooks(void);
+#ifndef KP_RESTRICTED_PROFILE_BUILD
+static int su_unregister_path_probe_hooks(void);
+#endif
+
+long kp_control_feature_sc(const char __user *uname, int state)
+{
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+    (void)uname;
+    (void)state;
+    return -EPERM;
+#else
+    char name[64];
+    int rc;
+    int len = compat_strncpy_from_user(name, uname, sizeof(name));
+    if (len <= 0)
+        return -EINVAL;
+
+    if (!strcmp(name, "sucompat_extra") || !strcmp(name, "path_probe")) {
+        if (state < 0)
+            return atomic_read(&su_path_probe_hooks_state) == SU_PATH_PROBES_ON;
+        rc = state ? su_register_path_probe_hooks() :
+                     su_unregister_path_probe_hooks();
+        if (!rc)
+            logkfi("sucompat_extra %s via supercall\n",
+                   state ? "enabled" : "disabled");
+        return rc;
+    }
+
+    /* Unknown feature name. */
+    return -ENOENT;
+#endif
+}
+KP_EXPORT_SYMBOL(kp_control_feature_sc);
 
 int is_su_allow_uid(uid_t uid)
 {
@@ -213,8 +256,28 @@ static void handle_before_execve(char **__user u_filename_p, char **__user uargv
     if (!is_su_allow_uid(uid) && !is_trusted_manager_uid(uid)) return;
 #endif
 
-    if (!strcmp(current_su_path, filename)) {
-        uid_t uid = current_uid();
+#ifdef ANDROID
+    // Match the configured su path (default /system/bin/kp) and the legacy
+    // /system/bin/su that shells and detectors also exec. execve does not go
+    // through getname_flags, so this before-hook is the only place to redirect
+    // a real exec of /system/bin/su to sh/apd.
+    if (strcmp(filename, current_su_path) && strcmp(filename, legacy_su_path)) {
+        if (!strcmp(SUPERCMD, filename)) {
+            void handle_supercmd(char **__user u_filename_p, char **__user uargv);
+            handle_supercmd(u_filename_p, uargv);
+        }
+        return;
+    }
+#else
+    if (strcmp(filename, current_su_path)) {
+        if (!strcmp(SUPERCMD, filename)) {
+            void handle_supercmd(char **__user u_filename_p, char **__user uargv);
+            handle_supercmd(u_filename_p, uargv);
+        }
+        return;
+    }
+#endif
+    {
         struct su_profile profile = { .to_uid = 0 };
 #ifdef KP_RESTRICTED_PROFILE_BUILD
         strncpy(profile.scontext, all_allow_sctx, sizeof(profile.scontext) - 1);
@@ -275,10 +338,6 @@ static void handle_before_execve(char **__user u_filename_p, char **__user uargv
             logkfi("call apd uid: %d, to_uid: %d, sctx: %s, cplen: %d, %d\n", uid, to_uid, sctx, cplen, argv_cplen);
         }
 #endif // ANDROID
-    } else if (!strcmp(SUPERCMD, filename)) {
-        void handle_supercmd(char **__user u_filename_p, char **__user uargv);
-        handle_supercmd(u_filename_p, uargv);
-        return;
     }
 }
 
@@ -346,7 +405,12 @@ __maybe_unused static void su_handler_arg1_ufilename_before(hook_fargs6_t *args,
     int flen = compat_strncpy_from_user(filename, *u_filename_p, sizeof(filename));
     if (flen <= 0) return;
 
-    if (!strcmp(current_su_path, filename)) {
+#ifdef ANDROID
+    if (strcmp(filename, current_su_path) && strcmp(filename, legacy_su_path)) return;
+#else
+    if (strcmp(filename, current_su_path)) return;
+#endif
+    {
         void *uptr = copy_to_user_stack(sh_path, sizeof(sh_path));
         if (uptr && !IS_ERR(uptr)) {
             *u_filename_p = uptr;
@@ -458,7 +522,22 @@ int su_compat_init()
     rc = hook_compat_syscalln(11, 3, before_execve, 0, (void *)1);
     log_boot("hook 32 __NR_execve rc: %d\n", rc);
 
-    unsigned long getname_flags_addr = kallsyms_lookup_name("getname_flags");
+    // Redirect the su path only for granted uids: after_getname_flags checks
+    // is_su_allow_uid/is_trusted_manager_uid, so a granted app's stat/access on
+    // /system/bin/su or /system/bin/kp lands on the real /system/bin/sh and the
+    // probe reports it present, while unprivileged callers keep the virtual su
+    // path un-redirected and get ENOENT (hidden).
+    //
+    // LTO kernels (e.g. OPPO 6.1) emit getname_flags as a CFI wrapper with zero
+    // callers; the real entry all path syscalls reach is __original_getname_flags.
+    // Prefer it, fall back to getname_flags for non-LTO builds.
+    unsigned long getname_flags_addr = 0;
+    getname_flags_addr = kallsyms_lookup_name("__original_getname_flags");
+    if (!getname_flags_addr) {
+        getname_flags_addr = kallsyms_lookup_name("getname_flags");
+    }else{
+        logkfi("found __original_getname_flags: %llx\n", getname_flags_addr);
+    }
     if (getname_flags_addr) {
         rc = hook_wrap3((void *)getname_flags_addr, 0, after_getname_flags, (void *)0);
         log_boot("hook getname_flags rc: %d\n", rc);
@@ -466,5 +545,88 @@ int su_compat_init()
         log_boot("getname_flags not found\n");
     }
 
+
     return 0;
+}
+
+static int su_register_path_probe_hooks(void)
+{
+    int rc;
+    int native_stat_installed = 0;
+    int native_access_installed = 0;
+    int compat_stat_installed = 0;
+    int old_state = atomic_cmpxchg(&su_path_probe_hooks_state,
+                                   SU_PATH_PROBES_OFF,
+                                   SU_PATH_PROBES_TRANSITION);
+
+    if (old_state == SU_PATH_PROBES_ON) return 0;
+    if (old_state != SU_PATH_PROBES_OFF) return -EBUSY;
+
+    rc = hook_syscalln(__NR3264_fstatat, 4, su_handler_arg1_ufilename_before, 0, (void *)0);
+    log_boot("hook __NR3264_fstatat rc: %d\n", rc);
+    if (rc != HOOK_NO_ERR) goto fail;
+    native_stat_installed = 1;
+
+    rc = hook_syscalln(__NR_faccessat, 3, su_handler_arg1_ufilename_before, 0, (void *)0);
+    log_boot("hook __NR_faccessat rc: %d\n", rc);
+    if (rc != HOOK_NO_ERR) goto fail;
+    native_access_installed = 1;
+
+    /* 32-bit compat probes: fstatat64(327) / faccessat(334) */
+    rc = hook_compat_syscalln(327, 4, su_handler_arg1_ufilename_before, 0, (void *)0);
+    log_boot("hook 32 __NR_fstatat64 rc: %d\n", rc);
+    if (rc != HOOK_NO_ERR) goto fail;
+    compat_stat_installed = 1;
+
+    rc = hook_compat_syscalln(334, 3, su_handler_arg1_ufilename_before, 0, (void *)0);
+    log_boot("hook 32 __NR_faccessat rc: %d\n", rc);
+    if (rc != HOOK_NO_ERR) goto fail;
+
+    atomic_set(&su_path_probe_hooks_state, SU_PATH_PROBES_ON);
+    return 0;
+
+fail:
+    if (compat_stat_installed)
+        unhook_compat_syscalln(327, su_handler_arg1_ufilename_before, 0);
+    if (native_access_installed)
+        unhook_syscalln(__NR_faccessat, su_handler_arg1_ufilename_before, 0);
+    if (native_stat_installed)
+        unhook_syscalln(__NR3264_fstatat, su_handler_arg1_ufilename_before, 0);
+    atomic_set(&su_path_probe_hooks_state, SU_PATH_PROBES_OFF);
+    return rc > 0 ? -rc : rc;
+}
+
+#ifndef KP_RESTRICTED_PROFILE_BUILD
+static int su_unregister_path_probe_hooks(void)
+{
+    int old_state = atomic_cmpxchg(&su_path_probe_hooks_state,
+                                   SU_PATH_PROBES_ON,
+                                   SU_PATH_PROBES_TRANSITION);
+
+    if (old_state == SU_PATH_PROBES_OFF) return 0;
+    if (old_state != SU_PATH_PROBES_ON) return -EBUSY;
+
+    unhook_syscalln(__NR3264_fstatat, su_handler_arg1_ufilename_before, 0);
+    unhook_syscalln(__NR_faccessat, su_handler_arg1_ufilename_before, 0);
+    unhook_compat_syscalln(327, su_handler_arg1_ufilename_before, 0);
+    unhook_compat_syscalln(334, su_handler_arg1_ufilename_before, 0);
+    atomic_set(&su_path_probe_hooks_state, SU_PATH_PROBES_OFF);
+    return 0;
+}
+#endif
+
+void sucompat_init()
+{
+    int rc;
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+    return;
+#endif
+    struct file *file = filp_open(sucompat_file, O_RDONLY, 0);
+    if (IS_ERR(file)) {
+        log_boot("failed to open sucompat file: %ld\n", PTR_ERR(file));
+        return;
+    }
+    filp_close(file, NULL);
+    rc = su_register_path_probe_hooks();
+    if (rc) log_boot("failed to enable su path probes: %d\n", rc);
 }

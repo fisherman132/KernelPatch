@@ -254,20 +254,26 @@ int fillin_map_symbol(kallsym_t *kallsym, char *img_buf, map_symbol_t *symbol, i
     }
 
     uint64_t memblock_alloc_try_nid = get_symbol_offset_zero(kallsym, img_buf, "memblock_alloc_try_nid");
-    if (!symbol->memblock_phys_alloc_relo && memblock_alloc_try_nid) {
-        symbol->memblock_phys_alloc_relo = memblock_alloc_try_nid;
-        symbol->memblock_phys_alloc_type = MAP_SYM_MEMBLOCK_ALLOC_TRY_NID;
-    }
-    if (!symbol->memblock_virt_alloc_relo && memblock_alloc_try_nid) {
-        symbol->memblock_virt_alloc_relo = memblock_alloc_try_nid;
-        symbol->memblock_virt_alloc_type = MAP_SYM_MEMBLOCK_VIRT_ALLOC_FROM_ALLOC_TRY_NID;
+    bool legacy_memblock_alloc =
+        kallsym->version.major != 0 &&
+        (kallsym->version.major < 4 ||
+         (kallsym->version.major == 4 && kallsym->version.minor <= 19));
+    if (memblock_alloc_try_nid) {
+        if (!symbol->memblock_phys_alloc_relo && legacy_memblock_alloc) {
+            symbol->memblock_phys_alloc_relo = memblock_alloc_try_nid;
+            symbol->memblock_phys_alloc_type = MAP_SYM_MEMBLOCK_ALLOC_TRY_NID;
+        }
+        if (!symbol->memblock_virt_alloc_relo && !legacy_memblock_alloc) {
+            symbol->memblock_virt_alloc_relo = memblock_alloc_try_nid;
+            symbol->memblock_virt_alloc_type = MAP_SYM_MEMBLOCK_VIRT_ALLOC_FROM_ALLOC_TRY_NID;
+        }
     }
 
     if (!symbol->memblock_phys_alloc_relo) {
         tools_loge_exit("no symbol memblock_phys_alloc_try_nid or memblock_alloc_try_nid\n");
     }
     if (!symbol->memblock_virt_alloc_relo) {
-        tools_loge_exit("no symbol memblock_virt_alloc_try_nid or memblock_alloc_try_nid\n");
+        tools_loge_exit("no compatible memblock virtual allocator; cannot derive the linear mapping safely\n");
     }
 
     if (symbol->memblock_phys_alloc_type == MAP_SYM_MEMBLOCK_ALLOC_TRY_NID) {
@@ -291,16 +297,24 @@ int fillin_patch_config(kallsym_t *kallsym, char *img_buf, int imglen, patch_con
     if (!symbol->printk) tools_loge_exit("no symbol printk");
 
     symbol->panic = get_symbol_offset_zero(kallsym, img_buf, "panic");
+    // panic exists on every kernel; without it the KP core cannot attach its
+    // bootlog dump and a patched image that misses it is almost always broken
+    if (!symbol->panic) tools_loge_exit("no symbol panic (KP core cannot hook panic, patch aborted)");
 
     symbol->rest_init = try_get_symbol_offset_zero(kallsym, img_buf, "rest_init");
     if (!symbol->rest_init) symbol->cgroup_init = try_get_symbol_offset_zero(kallsym, img_buf, "cgroup_init");
     if (!symbol->rest_init && !symbol->cgroup_init) tools_loge_exit("no symbol rest_init");
 
     symbol->kernel_init = try_get_symbol_offset_zero(kallsym, img_buf, "kernel_init");
+    if (!symbol->kernel_init) tools_logw("no symbol kernel_init (KPM event timing degraded)\n");
 
     symbol->report_cfi_failure = get_symbol_offset_zero(kallsym, img_buf, "report_cfi_failure");
     symbol->__cfi_slowpath_diag = get_symbol_offset_zero(kallsym, img_buf, "__cfi_slowpath_diag");
     symbol->__cfi_slowpath = get_symbol_offset_zero(kallsym, img_buf, "__cfi_slowpath");
+    if (!symbol->report_cfi_failure && !symbol->__cfi_slowpath_diag && !symbol->__cfi_slowpath) {
+        tools_logw("no CFI failure handler symbol (report_cfi_failure / __cfi_slowpath_diag / __cfi_slowpath)\n");
+        tools_logw("if the kernel has CONFIG_CFI_CLANG (Android 13+ GKI common), every kCFI mismatch on KP memory will panic -> random reboots; the KP core will retry resolution via kallsyms at boot\n");
+    }
 
     symbol->copy_process = try_get_symbol_offset_zero(kallsym, img_buf, "copy_process");
     if (!symbol->copy_process) symbol->cgroup_post_fork = get_symbol_offset_zero(kallsym, img_buf, "cgroup_post_fork");

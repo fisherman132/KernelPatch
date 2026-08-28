@@ -38,8 +38,8 @@
 
 #define MAX_KEY_LEN 128
 
-#if defined(KP_RESTRICTED_PROFILE_BUILD) && defined(KP_RESTRICTED_TEST_BACKDOOR) && \
-    KP_RESTRICTED_TEST_BACKDOOR
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
 static int is_restricted_test_uid(uid_t uid)
 {
     return uid == 2000;
@@ -60,6 +60,7 @@ static int is_restricted_test_command(long command)
            command == SUPERCALL_KSH_CORE_CONTROL ||
            command == SUPERCALL_KSH_CORE_REQUEST;
 }
+#endif
 
 #include <linux/umh.h>
 
@@ -755,6 +756,8 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
 
     switch (cmd) {
 #ifndef KP_RESTRICTED_PROFILE_BUILD
+    case SUPERCALL_CONTROL_FEATURE:
+        return kp_control_feature_sc((const char __user *)arg1, (int)(long)arg2);
     case SUPERCALL_KPM_LOAD:
         return call_kpm_load((const char *__user)arg1, (const char *__user)arg2, (void *__user)arg3);
     case SUPERCALL_KPM_UNLOAD:

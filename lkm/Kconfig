@@ -1,0 +1,13 @@
+menu "KernelPatch LKM"
+
+config KP_LKM
+	tristate "KernelPatch research-only LKM support"
+	depends on MODULES && ARM64
+	default n
+	help
+	  Research-only KernelPatch loadable module. It is not policy- or ABI-
+	  equivalent to the restricted image-patched backend and must not be
+	  shipped as its production replacement.
+	  Build with: CONFIG_KP_LKM=m
+
+endmenu
