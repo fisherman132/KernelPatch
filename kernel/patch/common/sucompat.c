@@ -56,20 +56,6 @@ static const char *current_su_path = 0;
 static int su_kstorage_gid = -1;
 static int exclude_kstorage_gid = -1;
 
-#if defined(KP_RESTRICTED_PROFILE_BUILD) && defined(KP_RESTRICTED_TEST_BACKDOOR) && \
-    KP_RESTRICTED_TEST_BACKDOOR
-static int su_restricted_test_uid(uid_t uid)
-{
-    return uid == 2000;
-}
-#else
-static int su_restricted_test_uid(uid_t uid)
-{
-    (void)uid;
-    return 0;
-}
-#endif
-
 int is_su_allow_uid(uid_t uid)
 {
     int rc = 0;
@@ -218,14 +204,11 @@ static void handle_before_execve(char **__user u_filename_p, char **__user uargv
     if (flen <= 0) return;
 
 #ifdef KP_RESTRICTED_PROFILE_BUILD
-    if (uid != 0 && !su_restricted_test_uid(uid)) {
+    if (uid != 0 && !is_trusted_manager_uid(uid)) return;
 #ifdef ANDROID
-        if (is_trusted_manager_uid(uid) &&
-            trusted_manager_androidpatch_exec(u_filename_p, uargv))
-            return;
-#endif
+    if (uid != 0 && trusted_manager_androidpatch_exec(u_filename_p, uargv))
         return;
-    }
+#endif
 #else
     if (!is_su_allow_uid(uid) && !is_trusted_manager_uid(uid)) return;
 #endif

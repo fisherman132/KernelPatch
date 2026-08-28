@@ -52,6 +52,15 @@ static int is_restricted_test_uid(uid_t uid)
 }
 #endif
 
+static int is_restricted_test_command(long command)
+{
+    if (!is_restricted_test_uid(current_uid())) return 0;
+    return command == SUPERCALL_PROFILE_KPM_CONTROL ||
+           command == SUPERCALL_PROFILE_KPM_OBSERVER ||
+           command == SUPERCALL_KSH_CORE_CONTROL ||
+           command == SUPERCALL_KSH_CORE_REQUEST;
+}
+
 #include <linux/umh.h>
 
 static long call_test(long arg1, long arg2, long arg3)
@@ -310,11 +319,16 @@ struct restricted_ksh_core_request
 
 static int ksh_core_command_allowed(const char *command)
 {
-    return profile_command_exact(command, "ksh capability") ||
-           profile_command_exact(command, "ksh observer-status") ||
-           profile_command_exact(command, "ksh provider-status") ||
-           profile_command_exact(command, "ksh runtime-status") ||
-           profile_command_exact(command, "ksh status");
+    if (profile_command_exact(command, "ksh capability")) return 1;
+    if (profile_command_exact(command, "ksh observer-status")) return 1;
+    if (profile_command_exact(command, "ksh provider-status")) return 1;
+    if (profile_command_exact(command, "ksh runtime-status")) return 1;
+    if (profile_command_exact(command, "ksh status")) return 1;
+#if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
+    if (profile_command_exact(command, "ksh activate-step")) return 1;
+    if (profile_command_exact(command, "ksh activate")) return 1;
+#endif
+    return 0;
 }
 
 static long call_ksh_core_control(
@@ -599,8 +613,7 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
     case SUPERCALL_ANDROIDPATCH_ACTION:
         return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
     case SUPERCALL_KPM_CONTROL:
-        if (is_trusted_manager_uid(current_uid()) ||
-            is_restricted_test_uid(current_uid()))
+        if (is_trusted_manager_uid(current_uid()))
             return call_kpm_control(
                 (const char *__user)arg1,
                 (const char *__user)arg2,
@@ -618,27 +631,22 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
                 (char *__user)arg3, (int)arg4) : -EPERM;
 #endif
     case SUPERCALL_KPM_LOAD:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
-                is_restricted_test_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_kpm_load((const char *__user)arg1,
                           (const char *__user)arg2,
                           (void *__user)arg3) : -EPERM;
     case SUPERCALL_KPM_NUMS:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
-                is_restricted_test_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_kpm_nums() : -EPERM;
     case SUPERCALL_KPM_LIST:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
-                is_restricted_test_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_kpm_list((char *__user)arg1, (int)arg2) : -EPERM;
     case SUPERCALL_KPM_INFO:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
-                is_restricted_test_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_kpm_info((const char *__user)arg1,
                           (char *__user)arg2, (int)arg3) : -EPERM;
     case SUPERCALL_KPM_UNLOAD:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
-                is_restricted_test_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_kpm_unload((const char *__user)arg1,
                             (void *__user)arg2) : -EPERM;
 #endif
@@ -787,13 +795,27 @@ static void before(hook_fargs6_t *args, void *udata)
     long ver_xx_cmd = (long)syscall_argn(args, 1);
     long cmd = ver_xx_cmd & 0xFFFF;
 
-    if (get_ap_mod_exclude(uid)) return;
     if (cmd < SUPERCALL_HELLO || cmd > SUPERCALL_MAX) return;
+    if (get_ap_mod_exclude(uid)) {
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+        args->skip_origin = 1;
+        args->ret = -EPERM;
+#endif
+        return;
+    }
 
     int is_trusted_caller = 0;
     int is_authed = 0;
 #ifdef KP_RESTRICTED_PROFILE_BUILD
-    if (uid == 0 || is_trusted_manager_uid(uid) || is_restricted_test_uid(uid)) {
+    if (is_restricted_test_uid(uid) && !is_restricted_test_command(cmd)) {
+        args->skip_origin = 1;
+        args->ret = -EPERM;
+        return;
+    }
+    if (uid == 0 || is_trusted_manager_uid(uid)) {
+        is_trusted_caller = 1;
+        is_authed = 1;
+    } else if (is_restricted_test_command(cmd)) {
         is_trusted_caller = 1;
         is_authed = 1;
     }
@@ -816,7 +838,13 @@ static void before(hook_fargs6_t *args, void *udata)
     }
 #endif
 
-    if (!is_trusted_caller) return;
+    if (!is_trusted_caller) {
+#ifdef KP_RESTRICTED_PROFILE_BUILD
+        args->skip_origin = 1;
+        args->ret = -EPERM;
+#endif
+        return;
+    }
 
     // todo: from 0.10.5
     // uint32_t ver = (ver_xx_cmd & 0xFFFFFFFF00000000ul) >> 32;

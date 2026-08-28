@@ -11,6 +11,8 @@ MODULE_SOURCE="$KERNEL_DIR/patch/module/module.c"
 MODULE_HEADER="$KERNEL_DIR/patch/include/module.h"
 RCU_HEADER="$KERNEL_DIR/linux/include/linux/rcupdate.h"
 SUPERCALL_SOURCE="$KERNEL_DIR/patch/common/supercall.c"
+SUCOMPAT_SOURCE="$KERNEL_DIR/patch/common/sucompat.c"
+SUPERCMD_SOURCE="$KERNEL_DIR/patch/common/supercmd.c"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kpm-module-lifecycle.XXXXXX")
 
 cleanup()
@@ -35,8 +37,11 @@ require_file "$MODULE_SOURCE"
 require_file "$MODULE_HEADER"
 require_file "$RCU_HEADER"
 require_file "$SUPERCALL_SOURCE"
+require_file "$SUCOMPAT_SOURCE"
+require_file "$SUPERCMD_SOURCE"
 
-python3 - "$MODULE_SOURCE" "$MODULE_HEADER" "$RCU_HEADER" "$SUPERCALL_SOURCE" <<'PY' || exit $?
+python3 - "$MODULE_SOURCE" "$MODULE_HEADER" "$RCU_HEADER" \
+    "$SUPERCALL_SOURCE" "$SUCOMPAT_SOURCE" "$SUPERCMD_SOURCE" <<'PY' || exit $?
 import re
 import sys
 from pathlib import Path
@@ -46,6 +51,8 @@ source = source_path.read_text(encoding="utf-8")
 module_header = Path(sys.argv[2]).read_text(encoding="utf-8")
 rcu_header = Path(sys.argv[3]).read_text(encoding="utf-8")
 supercall_source = Path(sys.argv[4]).read_text(encoding="utf-8")
+sucompat_source = Path(sys.argv[5]).read_text(encoding="utf-8")
+supercmd_source = Path(sys.argv[6]).read_text(encoding="utf-8")
 
 
 def fail(message: str) -> None:
@@ -178,8 +185,104 @@ for command, helper in (
         fail(f"restricted trusted-manager dispatch missing {command}")
     if "is_trusted_manager_uid(current_uid())" not in case.group("body"):
         fail(f"restricted KPM dispatch is not gated by trusted manager for {command}")
-if re.search(r"current_uid\(\)\s*==\s*2000", restricted_body):
-    fail("restricted production dispatch directly trusts shell UID 2000")
+    if re.search(r"is_restricted_test_(?:uid|command)", case.group("body")):
+        fail(f"restricted generic KPM dispatch grants test-shell access to {command}")
+supercall_code = strip_noncode(supercall_source)
+test_uid_matches = re.findall(r"return\s+uid\s*==\s*2000\s*;", supercall_code)
+if len(test_uid_matches) != 1:
+    fail("test-shell UID must be defined exactly once in the restricted broker")
+test_command = re.search(
+    r"static\s+int\s+is_restricted_test_command\s*\([^)]*\)\s*\{(?P<body>.*?)\}",
+    supercall_code,
+    re.S,
+)
+if not test_command:
+    fail("restricted test command gate is missing")
+allowed_test_commands = set(re.findall(r"SUPERCALL_[A-Z0-9_]+", test_command.group("body")))
+expected_test_commands = {
+    "SUPERCALL_PROFILE_KPM_CONTROL",
+    "SUPERCALL_PROFILE_KPM_OBSERVER",
+    "SUPERCALL_KSH_CORE_CONTROL",
+    "SUPERCALL_KSH_CORE_REQUEST",
+}
+if allowed_test_commands != expected_test_commands:
+    fail("test-shell command gate is not limited to fixed profile and KSH commands")
+before_hook = re.search(
+    r"static\s+void\s+before\s*\([^)]*\)\s*\{(?P<body>.*?)\n\}",
+    supercall_code,
+    re.S,
+)
+if not before_hook or "is_restricted_test_command(cmd)" not in before_hook.group("body"):
+    fail("supercall entry does not use the command-scoped test-shell gate")
+if re.search(
+    r"uid\s*==\s*0\s*\|\|\s*is_trusted_manager_uid\(uid\)\s*\|\|"
+    r"\s*is_restricted_test_uid\(uid\)",
+    before_hook.group("body"),
+):
+    fail("supercall entry still treats test shell as a fully trusted caller")
+for source_name, restricted_source in (
+    ("sucompat", sucompat_source),
+    ("supercmd", supercmd_source),
+):
+    restricted_code = strip_noncode(restricted_source)
+    if ("KP_RESTRICTED_TEST_BACKDOOR" in restricted_code or
+            "restricted_test_uid" in restricted_code):
+        fail(f"{source_name} still contains a test-shell privilege path")
+sucompat_code = strip_noncode(sucompat_source)
+if not re.search(
+    r"if\s*\(uid\s*!=\s*0\s*&&\s*!is_trusted_manager_uid\(uid\)\)",
+    sucompat_code,
+):
+    fail("restricted sucompat does not retain the signature-pinned Manager path")
+supercmd_entry = re.search(
+    r"void\s+handle_supercmd\s*\([^)]*\)\s*\{(?P<body>.*?)"
+    r"const\s+char\s+__user\s+\*p1",
+    strip_noncode(supercmd_source),
+    re.S,
+)
+if (not supercmd_entry or
+        "is_trusted_manager_uid(current_uid())" not in supercmd_entry.group("body") or
+        not re.search(
+            r"current_uid\(\)\s*!=\s*0\s*&&\s*!is_trusted_manager",
+            supercmd_entry.group("body"),
+        )):
+    fail("restricted supercmd does not retain the signature-pinned Manager path")
+if not re.search(
+    r"is_restricted_test_uid\(uid\)\s*&&\s*"
+    r"!is_restricted_test_command\(cmd\).*?"
+    r"args->ret\s*=\s*-EPERM",
+    before_hook.group("body"),
+    re.S,
+):
+    fail("test-shell commands outside the fixed broker do not fail with EPERM")
+if not re.search(
+    r"if\s*\(\s*!is_trusted_caller\s*\)\s*\{.*?"
+    r"#ifdef\s+KP_RESTRICTED_PROFILE_BUILD.*?"
+    r"args->ret\s*=\s*-EPERM",
+    before_hook.group("body"),
+    re.S,
+):
+    fail("untrusted restricted-build callers do not fail closed with EPERM")
+exclude_gate = re.search(
+    r"if\s*\(\s*get_ap_mod_exclude\(uid\)\s*\)\s*\{(?P<body>.*?)\}",
+    before_hook.group("body"),
+    re.S,
+)
+if not exclude_gate or not re.search(
+    r"#ifdef\s+KP_RESTRICTED_PROFILE_BUILD.*?"
+    r"args->ret\s*=\s*-EPERM",
+    exclude_gate.group("body"),
+    re.S,
+):
+    fail("excluded restricted-build callers do not fail closed with EPERM")
+if not re.search(
+    r"#if defined\(KP_RESTRICTED_TEST_BACKDOOR\).*?"
+    r"profile_command_exact\(command, \"ksh activate-step\"\).*?"
+    r"profile_command_exact\(command, \"ksh activate\"\).*?#endif",
+    supercall_source,
+    re.S,
+):
+    fail("KSH activation commands are not isolated behind the test build guard")
 require(code_source, r"spin_lock[^;]*module_lock", "module registry lock acquisition")
 require(code_source, r"spin_unlock[^;]*module_lock", "module registry lock release")
 require(rcu_header_code, r"kfunc_call_void\s*\(\s*synchronize_rcu\s*\)",
