@@ -1057,7 +1057,8 @@ int resolve_trusted_manager_apd_path(uid_t caller_uid, char *path, size_t path_l
 
     if (!path || !path_len || caller_uid == TRUSTED_MANAGER_UID_INVALID)
         return -EINVAL;
-    if (caller_uid != trusted_manager_uid || !trusted_manager_apd_path[0])
+    if ((caller_uid != 0 && caller_uid != trusted_manager_uid) ||
+        !trusted_manager_apd_path[0])
         return -EPERM;
     cached_len = strlen(trusted_manager_apd_path) + 1;
     if (cached_len > path_len)

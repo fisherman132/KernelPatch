@@ -336,7 +336,7 @@ void handle_supercmd(char **__user u_filename_p, char **__user uargv)
 #ifdef KP_RESTRICTED_PROFILE_BUILD
     if (current_uid() != 0 && !is_trusted_manager) return;
 #endif
-    if (is_trusted_manager) is_key_auth = 1;
+    if (current_uid() == 0 || is_trusted_manager) is_key_auth = 1;
     // key
     const char __user *p1 = get_user_arg_ptr(0, *uargv, 1);
     if (!p1 || IS_ERR(p1)) return;
@@ -351,8 +351,8 @@ void handle_supercmd(char **__user u_filename_p, char **__user uargv)
         is_key_auth = 1;
     } else if (!strcmp("su", arg1)) {
         uid_t uid = current_uid();
-        if (!is_su_allow_uid(uid) && !is_trusted_manager) return;
-        su_allow_uid_profile(0, uid, &profile);
+        if (uid != 0 && !is_su_allow_uid(uid) && !is_trusted_manager) return;
+        if (uid != 0) su_allow_uid_profile(0, uid, &profile);
     } else {
         if (!is_trusted_manager) return;
     }

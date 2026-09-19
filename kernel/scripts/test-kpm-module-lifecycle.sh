@@ -13,6 +13,8 @@ RCU_HEADER="$KERNEL_DIR/linux/include/linux/rcupdate.h"
 SUPERCALL_SOURCE="$KERNEL_DIR/patch/common/supercall.c"
 SUCOMPAT_SOURCE="$KERNEL_DIR/patch/common/sucompat.c"
 SUPERCMD_SOURCE="$KERNEL_DIR/patch/common/supercmd.c"
+USER_EVENT_SOURCE="$KERNEL_DIR/patch/common/user_event.c"
+USERD_SOURCE="$KERNEL_DIR/patch/android/userd.c"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kpm-module-lifecycle.XXXXXX")
 
 cleanup()
@@ -39,9 +41,12 @@ require_file "$RCU_HEADER"
 require_file "$SUPERCALL_SOURCE"
 require_file "$SUCOMPAT_SOURCE"
 require_file "$SUPERCMD_SOURCE"
+require_file "$USER_EVENT_SOURCE"
+require_file "$USERD_SOURCE"
 
 python3 - "$MODULE_SOURCE" "$MODULE_HEADER" "$RCU_HEADER" \
-    "$SUPERCALL_SOURCE" "$SUCOMPAT_SOURCE" "$SUPERCMD_SOURCE" <<'PY' || exit $?
+    "$SUPERCALL_SOURCE" "$SUCOMPAT_SOURCE" "$SUPERCMD_SOURCE" \
+    "$USER_EVENT_SOURCE" "$USERD_SOURCE" <<'PY' || exit $?
 import re
 import sys
 from pathlib import Path
@@ -53,6 +58,8 @@ rcu_header = Path(sys.argv[3]).read_text(encoding="utf-8")
 supercall_source = Path(sys.argv[4]).read_text(encoding="utf-8")
 sucompat_source = Path(sys.argv[5]).read_text(encoding="utf-8")
 supercmd_source = Path(sys.argv[6]).read_text(encoding="utf-8")
+user_event_source = Path(sys.argv[7]).read_text(encoding="utf-8")
+userd_source = Path(sys.argv[8]).read_text(encoding="utf-8")
 
 
 def fail(message: str) -> None:
@@ -168,6 +175,17 @@ restricted_dispatch = re.search(
 if not restricted_dispatch:
     fail("cannot locate restricted supercall dispatch")
 restricted_body = restricted_dispatch.group("body")
+manager_su_case = re.search(
+    r"case\s+SUPERCALL_SU\s*:(?P<body>.*?)(?=case\s+SUPERCALL_|#endif)",
+    restricted_body,
+    re.S,
+)
+if not manager_su_case or "call_su" not in manager_su_case.group("body"):
+    fail("restricted trusted-manager dispatch cannot elevate the Manager")
+if "is_trusted_manager_uid(current_uid())" not in manager_su_case.group("body"):
+    fail("restricted Manager SU dispatch is not gated by the exact trusted uid")
+if "SUPERCALL_SU_GRANT_UID" in restricted_body or "SUPERCALL_SU_REVOKE_UID" in restricted_body:
+    fail("restricted dispatch exposes generic app SU grants")
 for command, helper in (
     ("SUPERCALL_KPM_LOAD", "call_kpm_load"),
     ("SUPERCALL_KPM_CONTROL", "call_kpm_control"),
@@ -247,6 +265,29 @@ if (not supercmd_entry or
             supercmd_entry.group("body"),
         )):
     fail("restricted supercmd does not retain the signature-pinned Manager path")
+if not re.search(
+    r"current_uid\(\)\s*==\s*0\s*\|\|\s*is_trusted_manager",
+    supercmd_entry.group("body"),
+):
+    fail("restricted supercmd does not retain the root init-event path")
+if not re.search(
+    r"uid\s*!=\s*0\s*&&\s*!is_su_allow_uid\(uid\)\s*&&\s*"
+    r"!is_trusted_manager",
+    strip_noncode(supercmd_source),
+):
+    fail("restricted supercmd rejects root before boot event dispatch")
+if not re.search(
+    r"strcmp\(safe_event,\s*\"boot-completed\"\)\s*==\s*0.*?"
+    r"refresh_trusted_manager_state\(\)",
+    user_event_source,
+    re.S,
+):
+    fail("boot-completed does not refresh the trusted Manager uid")
+if not re.search(
+    r"caller_uid\s*!=\s*0\s*&&\s*caller_uid\s*!=\s*trusted_manager_uid",
+    strip_noncode(userd_source),
+):
+    fail("AndroidPatch bootstrap rejects a Manager thread after it becomes root")
 if not re.search(
     r"is_restricted_test_uid\(uid\)\s*&&\s*"
     r"!is_restricted_test_command\(cmd\).*?"

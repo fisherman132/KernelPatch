@@ -252,6 +252,12 @@ static int profile_command_allowed(const char *command)
     if (profile_command_exact(command, "uids_clear")) return 1;
 
     if (profile_command_prefix(command, "codes_add ")) return 1;
+    if (profile_command_prefix(command, "device_profile_begin ")) return 1;
+    if (profile_command_prefix(command, "device_profile_cpuinfo ")) return 1;
+    if (profile_command_prefix(command, "device_profile_derived ")) return 1;
+    if (profile_command_prefix(command, "device_profile_fonts ")) return 1;
+    if (profile_command_prefix(command, "device_profile_property ")) return 1;
+    if (profile_command_prefix(command, "device_profile_complete ")) return 1;
     if (profile_command_prefix(command, "environment_add ")) return 1;
     if (profile_command_prefix(command, "identity_add ")) return 1;
     if (profile_command_prefix(command, "metadata_add ")) return 1;
@@ -435,7 +441,6 @@ static long call_kpm_info(const char *__user uname, char *__user out_info, int o
     return sz;
 }
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su(struct su_profile *__user uprofile)
 {
     struct su_profile *profile = memdup_user(uprofile, sizeof(struct su_profile));
@@ -446,6 +451,7 @@ static long call_su(struct su_profile *__user uprofile)
     return rc;
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su_task(pid_t pid, struct su_profile *__user uprofile)
 {
     struct su_profile *profile = memdup_user(uprofile, sizeof(struct su_profile));
@@ -613,6 +619,9 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
         return current_uid() == 0 ? (long)get_trusted_manager_uid() : -EPERM;
     case SUPERCALL_ANDROIDPATCH_ACTION:
         return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
+    case SUPERCALL_SU:
+        return is_trusted_manager_uid(current_uid()) ?
+            call_su((struct su_profile *__user)arg1) : -EPERM;
     case SUPERCALL_KPM_CONTROL:
         if (is_trusted_manager_uid(current_uid()))
             return call_kpm_control(
