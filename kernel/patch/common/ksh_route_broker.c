@@ -8,8 +8,9 @@
 #include <symbol.h>
 #include <uapi/asm-generic/errno.h>
 
-#define KP_KSH_KVER_ANDROID12_5_10_236 0x050aecu
-#define KP_KSH_KVER_ANDROID15_6_6_30 0x06061eu
+#define KP_KSH_KVER_FAMILY_MASK 0xffffff00u
+#define KP_KSH_KVER_ANDROID12_5_10_FAMILY 0x050a00u
+#define KP_KSH_KVER_ANDROID15_6_6_FAMILY 0x060600u
 
 static struct kp_ksh_route_client route_client;
 static uint32_t route_registered;
@@ -135,12 +136,17 @@ int kp_ksh_route_broker_init(void)
     void *begin_exec = (void *)kallsyms_lookup_name("begin_new_exec");
     void *munmap;
     void *mprotect;
+    uint32_t kernel_family = kver & KP_KSH_KVER_FAMILY_MASK;
     hook_err_t rc;
 
     if (route_installed_mask != 0u)
         return route_installed_mask == KP_KSH_ROUTE_ALL ? 0 : -EBUSY;
-    munmap = (void *)kallsyms_lookup_name(
-        kver == KP_KSH_KVER_ANDROID12_5_10_236 ? "do_munmap" : "do_vmi_munmap");
+    if (kernel_family == KP_KSH_KVER_ANDROID12_5_10_FAMILY)
+        munmap = (void *)kallsyms_lookup_name("do_munmap");
+    else if (kernel_family == KP_KSH_KVER_ANDROID15_6_6_FAMILY)
+        munmap = (void *)kallsyms_lookup_name("do_vmi_munmap");
+    else
+        return -ENOSYS;
     mprotect = (void *)kallsyms_lookup_name("mprotect_fixup");
     if (!mem_abort || !exit_mmap || !munmap || !mprotect || !copy_process || !begin_exec)
         return -ENOSYS;
@@ -150,11 +156,11 @@ int kp_ksh_route_broker_init(void)
     rc = hook_wrap1(exit_mmap, broker_exit_mmap_before, broker_exit_mmap_after, 0);
     if (rc != HOOK_NO_ERR) return -EINVAL;
     route_installed_mask |= KP_KSH_ROUTE_EXIT_MMAP;
-    if (kver == KP_KSH_KVER_ANDROID12_5_10_236) {
+    if (kernel_family == KP_KSH_KVER_ANDROID12_5_10_FAMILY) {
         rc = hook_wrap4(munmap, broker_munmap_5_10_before, broker_munmap_5_10_after, 0);
         if (rc == HOOK_NO_ERR)
             rc = hook_wrap5(mprotect, broker_mprotect_5_10_before, broker_mprotect_5_10_after, 0);
-    } else if (kver == KP_KSH_KVER_ANDROID15_6_6_30) {
+    } else if (kernel_family == KP_KSH_KVER_ANDROID15_6_6_FAMILY) {
         rc = hook_wrap6(munmap, broker_munmap_6_6_before, broker_munmap_6_6_after, 0);
         if (rc == HOOK_NO_ERR)
             rc = hook_wrap7(mprotect, broker_mprotect_6_6_before, broker_mprotect_6_6_after, 0);

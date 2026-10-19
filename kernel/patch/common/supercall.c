@@ -39,6 +39,14 @@
 #define MAX_KEY_LEN 128
 
 #ifdef KP_RESTRICTED_PROFILE_BUILD
+__attribute__((used)) static const char kp_apatch_security_profile[] =
+    "kp_apatch_security_profile=root-managed";
+#else
+__attribute__((used)) static const char kp_apatch_security_profile[] =
+    "kp_apatch_security_profile=full";
+#endif
+
+#ifdef KP_RESTRICTED_PROFILE_BUILD
 #if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
 static int is_restricted_test_uid(uid_t uid)
 {
@@ -60,6 +68,14 @@ static int is_restricted_test_command(long command)
            command == SUPERCALL_KSH_CORE_CONTROL ||
            command == SUPERCALL_KSH_CORE_REQUEST;
 }
+#else
+#ifdef ANDROID
+static int is_restricted_test_uid(uid_t uid)
+{
+    (void)uid;
+    return 0;
+}
+#endif
 #endif
 
 #include <linux/umh.h>
@@ -487,7 +503,6 @@ static long call_skey_root_enable(int enable)
     return 0;
 }
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_grant_uid(struct su_profile *__user uprofile)
 {
     struct su_profile *profile = memdup_user(uprofile, sizeof(struct su_profile));
@@ -506,7 +521,6 @@ static long call_su_allow_uid_nums()
 {
     return su_allow_uid_nums();
 }
-#endif
 
 #ifdef ANDROID
 extern int android_is_safe_mode;
@@ -526,22 +540,24 @@ static long call_ap_load_package_config()
 }
 #endif
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su_list_allow_uid(uid_t *__user uids, int num)
 {
     return su_allow_uids(1, uids, num);
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su_allow_uid_profile(uid_t uid, struct su_profile *__user uprofile)
 {
     return su_allow_uid_profile(1, uid, uprofile);
 }
+#endif
 
 static long call_reset_su_path(const char *__user upath)
 {
     return su_reset_path(strndup_user(upath, SU_PATH_MAX_LEN));
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_su_get_path(char *__user ubuf, int buf_len)
 {
     const char *path = su_get_path();
@@ -570,12 +586,14 @@ static long call_kstorage_read(int gid, long did, void *out_data, int offset, in
 {
     return read_kstorage(gid, did, out_data, offset, dlen, true);
 }
+#endif
 
 static long call_kstorage_write(int gid, long did, void *data, int offset, int dlen)
 {
     return write_kstorage(gid, did, data, offset, dlen, true);
 }
 
+#ifndef KP_RESTRICTED_PROFILE_BUILD
 static long call_list_kstorage_ids(int gid, long *ids, int ids_len)
 {
     return list_kstorage_ids(gid, ids, ids_len, false);
@@ -620,8 +638,32 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
     case SUPERCALL_ANDROIDPATCH_ACTION:
         return trusted_manager_androidpatch_action(current_uid(), (int)arg1);
     case SUPERCALL_SU:
-        return is_trusted_manager_uid(current_uid()) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
             call_su((struct su_profile *__user)arg1) : -EPERM;
+    case SUPERCALL_SU_GRANT_UID:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_grant_uid((struct su_profile *__user)arg1) : -EPERM;
+    case SUPERCALL_SU_REVOKE_UID:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_revoke_uid((uid_t)arg1) : -EPERM;
+    case SUPERCALL_SU_NUMS:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_su_allow_uid_nums() : -EPERM;
+    case SUPERCALL_SU_LIST:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_su_list_allow_uid((uid_t *__user)arg1, (int)arg2) : -EPERM;
+    case SUPERCALL_SU_RESET_PATH:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_reset_su_path((const char *__user)arg1) : -EPERM;
+    case SUPERCALL_KSTORAGE_WRITE:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            call_kstorage_write(
+                (int)arg1, (long)arg2, (void *)arg3,
+                (int)((long)arg4 >> 32), (long)arg4 << 32 >> 32) : -EPERM;
+    case SUPERCALL_CONTROL_FEATURE:
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+            kp_control_feature_sc(
+                (const char __user *)arg1, (int)(long)arg2) : -EPERM;
     case SUPERCALL_KPM_CONTROL:
         if (is_trusted_manager_uid(current_uid()))
             return call_kpm_control(

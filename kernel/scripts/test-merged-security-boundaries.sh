@@ -37,13 +37,28 @@ restricted = re.search(
     patched, re.S)
 if not restricted:
     fail("cannot locate restricted patched-kernel dispatch")
-if "SUPERCALL_CONTROL_FEATURE" in restricted.group("body"):
-    fail("restricted patched-kernel dispatch exposes feature control")
+feature_case = re.search(
+    r"case\s+SUPERCALL_CONTROL_FEATURE\s*:(?P<body>.*?)"
+    r"(?=case\s+SUPERCALL_|#endif)",
+    restricted.group("body"), re.S)
+if not feature_case or "kp_control_feature_sc" not in feature_case.group("body") or \
+        "current_uid() == 0" not in feature_case.group("body") or \
+        "is_trusted_manager_uid(current_uid())" not in feature_case.group("body"):
+    fail("root-managed sucompat feature lacks a root/manager gate")
+if '"sucompat_extra"' not in sucompat_source or '"path_probe"' not in sucompat_source or \
+        "return -ENOENT" not in sucompat_source:
+    fail("root-managed feature control is not limited to fixed sucompat names")
+sucompat_init = re.search(
+    r"void\s+sucompat_init\s*\([^)]*\)\s*\{(?P<body>.*?)\n\}",
+    sucompat_source, re.S)
+if not sucompat_init or "filp_open(sucompat_file" not in sucompat_init.group("body") or \
+        "su_register_path_probe_hooks()" not in sucompat_init.group("body"):
+    fail("root-managed sucompat is not gated by the APatch runtime marker")
 if not re.search(
-        r"void\s+sucompat_init\s*\([^)]*\)\s*\{\s*"
-        r"int\s+rc\s*;\s*#ifdef\s+KP_RESTRICTED_PROFILE_BUILD\s*return\s*;",
+        r"#ifdef\s+KP_RESTRICTED_PROFILE_BUILD\s*"
+        r"if\s*\(uid\s*!=\s*0\s*&&\s*!is_trusted_manager_uid\(uid\)\)\s*return\s*;",
         sucompat_source, re.S):
-    fail("restricted patched-kernel build can auto-enable path probes")
+    fail("root-managed exec redirect lacks the root or trusted-manager gate")
 
 for command in (
     "SUPERCALL_SU_TASK", "SUPERCALL_SU_GRANT_UID",

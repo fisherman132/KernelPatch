@@ -184,8 +184,26 @@ if not manager_su_case or "call_su" not in manager_su_case.group("body"):
     fail("restricted trusted-manager dispatch cannot elevate the Manager")
 if "is_trusted_manager_uid(current_uid())" not in manager_su_case.group("body"):
     fail("restricted Manager SU dispatch is not gated by the exact trusted uid")
-if "SUPERCALL_SU_GRANT_UID" in restricted_body or "SUPERCALL_SU_REVOKE_UID" in restricted_body:
-    fail("restricted dispatch exposes generic app SU grants")
+if "current_uid() == 0" not in manager_su_case.group("body"):
+    fail("restricted SU dispatch does not preserve root APD lifecycle")
+for command, helper in (
+    ("SUPERCALL_SU_GRANT_UID", "call_grant_uid"),
+    ("SUPERCALL_SU_REVOKE_UID", "call_revoke_uid"),
+    ("SUPERCALL_SU_NUMS", "call_su_allow_uid_nums"),
+    ("SUPERCALL_SU_LIST", "call_su_list_allow_uid"),
+    ("SUPERCALL_SU_RESET_PATH", "call_reset_su_path"),
+    ("SUPERCALL_KSTORAGE_WRITE", "call_kstorage_write"),
+):
+    case = re.search(
+        rf"case\s+{command}\s*:(?P<body>.*?)(?=case\s+SUPERCALL_|#endif)",
+        restricted_body,
+        re.S,
+    )
+    if not case or helper not in case.group("body"):
+        fail(f"restricted root APD dispatch missing {command}")
+    if "current_uid() == 0" not in case.group("body") or \
+            "is_trusted_manager_uid(current_uid())" not in case.group("body"):
+        fail(f"restricted APD command lacks root/manager gate: {command}")
 for command, helper in (
     ("SUPERCALL_KPM_LOAD", "call_kpm_load"),
     ("SUPERCALL_KPM_CONTROL", "call_kpm_control"),

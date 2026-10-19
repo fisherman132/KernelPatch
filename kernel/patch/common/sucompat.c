@@ -65,17 +65,10 @@ enum {
 };
 static atomic_t su_path_probe_hooks_state = ATOMIC_INIT(SU_PATH_PROBES_OFF);
 static int su_register_path_probe_hooks(void);
-#ifndef KP_RESTRICTED_PROFILE_BUILD
 static int su_unregister_path_probe_hooks(void);
-#endif
 
 long kp_control_feature_sc(const char __user *uname, int state)
 {
-#ifdef KP_RESTRICTED_PROFILE_BUILD
-    (void)uname;
-    (void)state;
-    return -EPERM;
-#else
     char name[64];
     int rc;
     int len = compat_strncpy_from_user(name, uname, sizeof(name));
@@ -95,7 +88,6 @@ long kp_control_feature_sc(const char __user *uname, int state)
 
     /* Unknown feature name. */
     return -ENOENT;
-#endif
 }
 KP_EXPORT_SYMBOL(kp_control_feature_sc);
 
@@ -596,7 +588,6 @@ fail:
     return rc > 0 ? -rc : rc;
 }
 
-#ifndef KP_RESTRICTED_PROFILE_BUILD
 static int su_unregister_path_probe_hooks(void)
 {
     int old_state = atomic_cmpxchg(&su_path_probe_hooks_state,
@@ -613,14 +604,10 @@ static int su_unregister_path_probe_hooks(void)
     atomic_set(&su_path_probe_hooks_state, SU_PATH_PROBES_OFF);
     return 0;
 }
-#endif
 
 void sucompat_init()
 {
     int rc;
-#ifdef KP_RESTRICTED_PROFILE_BUILD
-    return;
-#endif
     struct file *file = filp_open(sucompat_file, O_RDONLY, 0);
     if (IS_ERR(file)) {
         log_boot("failed to open sucompat file: %ld\n", PTR_ERR(file));
