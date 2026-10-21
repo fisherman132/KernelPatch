@@ -63,10 +63,16 @@ static int is_restricted_test_uid(uid_t uid)
 static int is_restricted_test_command(long command)
 {
     if (!is_restricted_test_uid(current_uid())) return 0;
-    return command == SUPERCALL_PROFILE_KPM_CONTROL ||
-           command == SUPERCALL_PROFILE_KPM_OBSERVER ||
-           command == SUPERCALL_KSH_CORE_CONTROL ||
-           command == SUPERCALL_KSH_CORE_REQUEST;
+	    return command == SUPERCALL_PROFILE_KPM_CONTROL ||
+	           command == SUPERCALL_PROFILE_KPM_OBSERVER ||
+	           command == SUPERCALL_KSH_CORE_CONTROL ||
+	           command == SUPERCALL_KSH_CORE_REQUEST ||
+	           command == SUPERCALL_KPM_LOAD ||
+	           command == SUPERCALL_KPM_UNLOAD ||
+	           command == SUPERCALL_KPM_CONTROL ||
+	           command == SUPERCALL_KPM_NUMS ||
+	           command == SUPERCALL_KPM_LIST ||
+	           command == SUPERCALL_KPM_INFO;
 }
 #else
 #ifdef ANDROID
@@ -350,6 +356,27 @@ static int ksh_core_command_allowed(const char *command)
 #if defined(KP_RESTRICTED_TEST_BACKDOOR) && KP_RESTRICTED_TEST_BACKDOOR
     if (profile_command_exact(command, "ksh activate-step")) return 1;
     if (profile_command_exact(command, "ksh activate")) return 1;
+    if (profile_command_exact(command, "observer status")) return 1;
+    if (profile_command_exact(command, "observer debug-status")) return 1;
+    if (profile_command_exact(command, "observer fault-status")) return 1;
+    if (profile_command_exact(command, "observer launch-status")) return 1;
+    if (profile_command_exact(command, "observer launch-mark-installed")) return 1;
+    if (profile_command_exact(command, "observer launch-release")) return 1;
+    if (profile_command_exact(command, "observer launch-cleanup")) return 1;
+    if (profile_command_exact(command, "observer launch-local-install-commit")) return 1;
+    if (profile_command_exact(command, "observer install")) return 1;
+    if (profile_command_exact(command, "observer install-release")) return 1;
+    if (profile_command_exact(command, "observer observe")) return 1;
+    if (profile_command_exact(command, "observer clear")) return 1;
+    if (profile_command_prefix(command, "observer launch-arm ")) return 1;
+    if (profile_command_prefix(command, "observer launch-seed-existing ")) return 1;
+    if (profile_command_prefix(command, "observer launch-local-install-enable ")) return 1;
+    if (profile_command_prefix(command, "observer launch-deferred-install-enable ")) return 1;
+    if (profile_command_prefix(command, "observer resolver-set ")) return 1;
+    if (profile_command_prefix(command, "observer reserve ")) return 1;
+    if (profile_command_prefix(command, "observer event-read ")) return 1;
+    if (profile_command_prefix(command, "observer event-read-raw ")) return 1;
+    if (profile_command_prefix(command, "observer event-read-raw-direct ")) return 1;
 #endif
     return 0;
 }
@@ -364,7 +391,7 @@ static long call_ksh_core_control(
     if (current_uid() != 0 && !is_trusted_manager_uid(current_uid()) &&
         !is_restricted_test_uid(current_uid()))
         return -EPERM;
-    if (!command_user || !out_msg || outlen <= 0 || outlen > 4096)
+    if (!command_user || !out_msg || outlen <= 0 || outlen > 16384)
         return -EINVAL;
     length = compat_strncpy_from_user(command, command_user, sizeof(command));
     if (length <= 0) return -EINVAL;
@@ -676,29 +703,34 @@ static long supercall(int is_authed, long cmd, long arg1, long arg2, long arg3, 
             (const char *__user)arg2,
             (char *__user)arg3, (int)arg4);
 #else
-        return current_uid() == 0 ?
+        return (current_uid() == 0 || is_restricted_test_uid(current_uid())) ?
             call_kpm_control(
                 (const char *__user)arg1,
                 (const char *__user)arg2,
                 (char *__user)arg3, (int)arg4) : -EPERM;
 #endif
     case SUPERCALL_KPM_LOAD:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_load((const char *__user)arg1,
                           (const char *__user)arg2,
                           (void *__user)arg3) : -EPERM;
     case SUPERCALL_KPM_NUMS:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_nums() : -EPERM;
     case SUPERCALL_KPM_LIST:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_list((char *__user)arg1, (int)arg2) : -EPERM;
     case SUPERCALL_KPM_INFO:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_info((const char *__user)arg1,
                           (char *__user)arg2, (int)arg3) : -EPERM;
     case SUPERCALL_KPM_UNLOAD:
-        return (current_uid() == 0 || is_trusted_manager_uid(current_uid())) ?
+        return (current_uid() == 0 || is_trusted_manager_uid(current_uid()) ||
+                is_restricted_test_uid(current_uid())) ?
             call_kpm_unload((const char *__user)arg1,
                             (void *__user)arg2) : -EPERM;
 #endif
