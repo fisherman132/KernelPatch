@@ -44,7 +44,8 @@ typedef int8_t chain_item_state;
 #define RELOCATE_INST_NUM (4 * 8 + 8 - 4)
 
 #define HOOK_CHAIN_NUM 0x10
-#define TRANSIT_INST_NUM 0x60
+/* Includes entry-mask/zero-initialization logic for paired callbacks. */
+#define TRANSIT_INST_NUM 0x80
 
 #define FP_HOOK_CHAIN_NUM 0x20
 

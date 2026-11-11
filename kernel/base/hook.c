@@ -351,10 +351,15 @@ uint64_t __attribute__((section(".transit0.text"))) __attribute__((__noinline__)
     hook_chain_t *hook_chain = current_inline_hook_chain();
     if (!hook_chain) return 0;
     hook_fargs0_t fargs;
+    /* Registration during origin must never create an unpaired AFTER. */
+    uint32_t entered_mask = 0u;
+    fargs.local = (hook_local_t){0};
+    fargs.ret = 0u;
     fargs.skip_origin = 0;
     fargs.chain = hook_chain;
     for (int32_t i = 0; i < hook_chain->chain_items_max; i++) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if (__atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
+        entered_mask |= 1u << (uint32_t)i;
         hook_chain0_callback func = hook_chain->befores[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -363,7 +368,8 @@ uint64_t __attribute__((section(".transit0.text"))) __attribute__((__noinline__)
         fargs.ret = origin_func();
     }
     for (int32_t i = hook_chain->chain_items_max - 1; i >= 0; i--) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if ((entered_mask & (1u << (uint32_t)i)) == 0u ||
+            __atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
         hook_chain0_callback func = hook_chain->afters[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -382,6 +388,10 @@ _transit4(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3)
     hook_chain_t *hook_chain = current_inline_hook_chain();
     if (!hook_chain) return 0;
     hook_fargs4_t fargs;
+    /* Registration during origin must never create an unpaired AFTER. */
+    uint32_t entered_mask = 0u;
+    fargs.local = (hook_local_t){0};
+    fargs.ret = 0u;
     fargs.skip_origin = 0;
     fargs.arg0 = arg0;
     fargs.arg1 = arg1;
@@ -389,7 +399,8 @@ _transit4(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3)
     fargs.arg3 = arg3;
     fargs.chain = hook_chain;
     for (int32_t i = 0; i < hook_chain->chain_items_max; i++) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if (__atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
+        entered_mask |= 1u << (uint32_t)i;
         hook_chain4_callback func = hook_chain->befores[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -398,7 +409,8 @@ _transit4(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3)
         fargs.ret = origin_func(fargs.arg0, fargs.arg1, fargs.arg2, fargs.arg3);
     }
     for (int32_t i = hook_chain->chain_items_max - 1; i >= 0; i--) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if ((entered_mask & (1u << (uint32_t)i)) == 0u ||
+            __atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
         hook_chain4_callback func = hook_chain->afters[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -419,6 +431,10 @@ _transit8(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t a
     hook_chain_t *hook_chain = current_inline_hook_chain();
     if (!hook_chain) return 0;
     hook_fargs8_t fargs;
+    /* Registration during origin must never create an unpaired AFTER. */
+    uint32_t entered_mask = 0u;
+    fargs.local = (hook_local_t){0};
+    fargs.ret = 0u;
     fargs.skip_origin = 0;
     fargs.arg0 = arg0;
     fargs.arg1 = arg1;
@@ -430,7 +446,8 @@ _transit8(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t a
     fargs.arg7 = arg7;
     fargs.chain = hook_chain;
     for (int32_t i = 0; i < hook_chain->chain_items_max; i++) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if (__atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
+        entered_mask |= 1u << (uint32_t)i;
         hook_chain8_callback func = hook_chain->befores[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -440,7 +457,8 @@ _transit8(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t a
             origin_func(fargs.arg0, fargs.arg1, fargs.arg2, fargs.arg3, fargs.arg4, fargs.arg5, fargs.arg6, fargs.arg7);
     }
     for (int32_t i = hook_chain->chain_items_max - 1; i >= 0; i--) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if ((entered_mask & (1u << (uint32_t)i)) == 0u ||
+            __atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
         hook_chain8_callback func = hook_chain->afters[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -462,6 +480,10 @@ _transit12(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t 
     hook_chain_t *hook_chain = current_inline_hook_chain();
     if (!hook_chain) return 0;
     hook_fargs12_t fargs;
+    /* Registration during origin must never create an unpaired AFTER. */
+    uint32_t entered_mask = 0u;
+    fargs.local = (hook_local_t){0};
+    fargs.ret = 0u;
     fargs.skip_origin = 0;
     fargs.arg0 = arg0;
     fargs.arg1 = arg1;
@@ -477,7 +499,8 @@ _transit12(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t 
     fargs.arg11 = arg11;
     fargs.chain = hook_chain;
     for (int32_t i = 0; i < hook_chain->chain_items_max; i++) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if (__atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
+        entered_mask |= 1u << (uint32_t)i;
         hook_chain12_callback func = hook_chain->befores[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -487,7 +510,8 @@ _transit12(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t 
                                 fargs.arg7, fargs.arg8, fargs.arg9, fargs.arg10, fargs.arg11);
     }
     for (int32_t i = hook_chain->chain_items_max - 1; i >= 0; i--) {
-        if (hook_chain->states[i] != CHAIN_ITEM_STATE_READY) continue;
+        if ((entered_mask & (1u << (uint32_t)i)) == 0u ||
+            __atomic_load_n(&hook_chain->states[i], __ATOMIC_ACQUIRE) != CHAIN_ITEM_STATE_READY) continue;
         hook_chain12_callback func = hook_chain->afters[i];
         if (func) func(&fargs, hook_chain->udata[i]);
     }
@@ -717,7 +741,7 @@ hook_err_t hook_chain_add(hook_chain_t *chain, void *before, void *after, void *
                 chain->chain_items_max = i + 1;
             }
             dsb(ish);
-            chain->states[i] = CHAIN_ITEM_STATE_READY;
+            __atomic_store_n(&chain->states[i], CHAIN_ITEM_STATE_READY, __ATOMIC_RELEASE);
             logkv("Wrap chain add: %llx, %llx, %llx successed\n", chain->hook.func_addr, (uint64_t)before, (uint64_t)after);
             return HOOK_NO_ERR;
         }

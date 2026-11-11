@@ -44,18 +44,22 @@ static void broker_exit_mmap_after(hook_fargs1_t *args, void *unused)
         route_client.exit_mmap_after(args, route_client.context);
 }
 
-static void broker_munmap_5_10_before(hook_fargs4_t *args, void *unused)
+/* __do_munmap is shared by vm_munmap and do_munmap. Hooking only the latter
+ * misses userspace munmap, leaving stale source/ghost identities alive after
+ * address reuse. The fifth (downgrade) argument belongs to the kernel; the
+ * existing client ABI consumes only the common four-argument prefix. */
+static void broker_munmap_5_10_before(hook_fargs5_t *args, void *unused)
 {
     (void)unused;
     if (route_enabled(KP_KSH_ROUTE_MUNMAP) && route_client.munmap_5_10_before)
-        route_client.munmap_5_10_before(args, route_client.context);
+        route_client.munmap_5_10_before((hook_fargs4_t *)args, route_client.context);
 }
 
-static void broker_munmap_5_10_after(hook_fargs4_t *args, void *unused)
+static void broker_munmap_5_10_after(hook_fargs5_t *args, void *unused)
 {
     (void)unused;
     if (route_enabled(KP_KSH_ROUTE_MUNMAP) && route_client.munmap_5_10_after)
-        route_client.munmap_5_10_after(args, route_client.context);
+        route_client.munmap_5_10_after((hook_fargs4_t *)args, route_client.context);
 }
 
 static void broker_munmap_6_6_before(hook_fargs6_t *args, void *unused)
@@ -142,7 +146,7 @@ int kp_ksh_route_broker_init(void)
     if (route_installed_mask != 0u)
         return route_installed_mask == KP_KSH_ROUTE_ALL ? 0 : -EBUSY;
     if (kernel_family == KP_KSH_KVER_ANDROID12_5_10_FAMILY)
-        munmap = (void *)kallsyms_lookup_name("do_munmap");
+        munmap = (void *)kallsyms_lookup_name("__do_munmap");
     else if (kernel_family == KP_KSH_KVER_ANDROID15_6_6_FAMILY)
         munmap = (void *)kallsyms_lookup_name("do_vmi_munmap");
     else
@@ -157,7 +161,7 @@ int kp_ksh_route_broker_init(void)
     if (rc != HOOK_NO_ERR) return -EINVAL;
     route_installed_mask |= KP_KSH_ROUTE_EXIT_MMAP;
     if (kernel_family == KP_KSH_KVER_ANDROID12_5_10_FAMILY) {
-        rc = hook_wrap4(munmap, broker_munmap_5_10_before, broker_munmap_5_10_after, 0);
+        rc = hook_wrap5(munmap, broker_munmap_5_10_before, broker_munmap_5_10_after, 0);
         if (rc == HOOK_NO_ERR)
             rc = hook_wrap5(mprotect, broker_mprotect_5_10_before, broker_mprotect_5_10_after, 0);
     } else if (kernel_family == KP_KSH_KVER_ANDROID15_6_6_FAMILY) {
